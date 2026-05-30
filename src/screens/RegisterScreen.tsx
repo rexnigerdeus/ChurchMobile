@@ -8,58 +8,82 @@ export default function RegisterScreen({ onNavigateToLogin }: { onNavigateToLogi
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [churchCode, setChurchCode] = useState('');
+  const [gender, setGender] = useState('M'); // 🔴 NOUVEAU : État pour le genre (Par défaut M)
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  async function handleRegister() {
+async function handleRegister() {
     if (!fullName || !email || !password || !churchCode) {
-      return Alert.alert('Erreur', 'Veuillez remplir tous les champs.');
+      return Alert.alert('Erreur', 'Veuillez remplir tous les champs obligatoires.');
     }
     setLoading(true);
 
     try {
-      // 1. Vérifier si le code de l'église existe
+      const cleanEmail = email.trim().toLowerCase();
+
+      // 🔴 1. BLOCAGE STRICT ANTI-DOUBLON
+      // On appelle la fonction SQL is_email_registered pour être sûr
+      const { data: emailExists, error: rpcError } = await supabase.rpc('is_email_registered', { p_email: cleanEmail });
+      
+      if (rpcError) throw new Error("Erreur de vérification du compte. Veuillez réessayer.");
+      
+      if (emailExists) {
+        // On bloque ici et on ne passe jamais à l'étape signUp
+        return Alert.alert(
+          'Compte existant', 
+          'Cet email est déjà utilisé. Veuillez vous connecter ou contacter votre pasteur.'
+        );
+      }
+
+      // 2. Vérifier si le code de l'église existe
       const { data: church, error: churchError } = await supabase
         .from('churches')
         .select('id, community_id')
         .ilike('church_code', churchCode.trim())
         .single();
 
-      if (churchError || !church) {
-        throw new Error("Code Église invalide. Vérifiez auprès de votre pasteur.");
-      }
+      if (churchError || !church) throw new Error("Code Église invalide. Vérifiez auprès de votre pasteur.");
 
-      // 2. Créer le compte utilisateur
+      // 3. Créer le compte utilisateur
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
+        email: cleanEmail,
         password,
       });
 
-      if (authError) throw authError;
+      if (authError) throw new Error(authError.message);
 
-      // 3. Si création réussie, on insère le profil public et la fiche CRM
+      // 4. Gestion des profils
       if (authData.user) {
+        // ... (le reste du code d'insertion profil et liaison CRM reste identique)
         await supabase.from('user_profiles').insert({
           id: authData.user.id,
           full_name: fullName,
-          email: email,
+          email: cleanEmail,
           community_id: church.community_id
         });
 
-        await supabase.from('church_members').insert({
-          church_id: church.id,
-          user_id: authData.user.id,
-          full_name: fullName,
-          email: email,
-          status: 'PENDING' // 🔴 Attente de validation du Secrétariat
+        const { data: isLinked } = await supabase.rpc('link_member_to_auth', {
+          p_email: cleanEmail,
+          p_user_id: authData.user.id,
+          p_church_id: church.id
         });
+
+        if (!isLinked) {
+          await supabase.from('church_members').insert({
+            church_id: church.id,
+            user_id: authData.user.id,
+            full_name: fullName,
+            email: cleanEmail,
+            gender: gender, 
+            status: 'APPROVED'
+          });
+        }
       }
 
-      Alert.alert('Félicitations !', 'Votre compte a été créé. Le secrétariat validera votre accès complet prochainement.');
-      // Pas besoin de rediriger manuellement, App.tsx détectera la connexion et passera sur HomeScreen
+      Alert.alert('Félicitations !', 'Votre compte a été créé. Vous pouvez maintenant y accéder.');
       
     } catch (e: any) {
-      Alert.alert('Erreur', e.message);
+      Alert.alert('Information', e.message);
     } finally {
       setLoading(false);
     }
@@ -67,7 +91,7 @@ export default function RegisterScreen({ onNavigateToLogin }: { onNavigateToLogi
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         
         <View style={styles.logoContainer}>
           <Text style={styles.logoText}>🕊️</Text>
@@ -103,6 +127,23 @@ export default function RegisterScreen({ onNavigateToLogin }: { onNavigateToLogi
             onChangeText={setEmail}
           />
 
+          {/* 🔴 NOUVEAU : Sélection du genre */}
+          <Text style={styles.label}>Genre *</Text>
+          <View style={styles.genderRow}>
+            <TouchableOpacity 
+              style={[styles.genderBtn, gender === 'M' && styles.genderBtnActive]} 
+              onPress={() => setGender('M')}
+            >
+              <Text style={[styles.genderText, gender === 'M' && styles.genderTextActive]}>Masculin</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.genderBtn, gender === 'F' && styles.genderBtnActive]} 
+              onPress={() => setGender('F')}
+            >
+              <Text style={[styles.genderText, gender === 'F' && styles.genderTextActive]}>Féminin</Text>
+            </TouchableOpacity>
+          </View>
+
           <Text style={styles.label}>Mot de passe *</Text>
           <View style={styles.passwordWrapper}>
             <TextInput
@@ -131,14 +172,21 @@ export default function RegisterScreen({ onNavigateToLogin }: { onNavigateToLogi
 }
 
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, backgroundColor: '#f8fafc', justifyContent: 'center', padding: 24 },
-  logoContainer: { alignItems: 'center', marginBottom: 30, marginTop: 40 },
+  container: { flexGrow: 1, backgroundColor: '#f8fafc', justifyContent: 'center', padding: 24, paddingVertical: 50 },
+  logoContainer: { alignItems: 'center', marginBottom: 30, marginTop: 10 },
   logoText: { fontSize: 50, marginBottom: 10 },
   title: { fontSize: 26, fontWeight: 'bold', color: '#0f172a' },
   subtitle: { fontSize: 15, color: '#64748b', marginTop: 5 },
   formContainer: { backgroundColor: '#fff', padding: 24, borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 3 },
   label: { fontSize: 13, fontWeight: '600', color: '#334155', marginBottom: 8 },
   input: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 12, padding: 15, fontSize: 15, color: '#0f172a', marginBottom: 16 },
+  
+  genderRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  genderBtn: { flex: 1, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center', backgroundColor: '#f8fafc' },
+  genderBtnActive: { borderColor: '#0f172a', backgroundColor: '#0f172a' },
+  genderText: { fontSize: 14, fontWeight: '600', color: '#64748b' },
+  genderTextActive: { color: '#fff' },
+
   passwordWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 12, marginBottom: 20 },
   passwordInput: { flex: 1, padding: 15, fontSize: 15, color: '#0f172a' },
   eyeButton: { padding: 10, marginRight: 5 },
