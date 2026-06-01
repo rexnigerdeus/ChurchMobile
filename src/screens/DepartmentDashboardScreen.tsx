@@ -31,6 +31,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [activeMembers, setActiveMembers] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   
+  const [creatingGroup, setCreatingGroup] = useState(false); // 🔴 CORRECTION BUG: État manquant
   const [newGroupName, setNewGroupName] = useState('');
   const [selectedMember, setSelectedMember] = useState<any>(null); 
 
@@ -46,7 +47,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
 
   const [plannings, setPlannings] = useState<any[]>([]);
   const [churchPrograms, setChurchPrograms] = useState<any[]>([]);
-  const [allChurchPrograms, setAllChurchPrograms] = useState<any[]>([]); // 🔴 Tous les programmes pour le dénombrement
+  const [allChurchPrograms, setAllChurchPrograms] = useState<any[]>([]); 
   const [planningRoles, setPlanningRoles] = useState<any[]>([]);
   const [isAddingPlanning, setIsAddingPlanning] = useState(false);
   const [selectedChurchProgram, setSelectedChurchProgram] = useState<any>(null);
@@ -74,7 +75,8 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [isAddingSoul, setIsAddingSoul] = useState(false);
   const [newSoul, setNewSoul] = useState({ 
     id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '',
-    is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false
+    is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false,
+    integration_status: 'NONE', integration_notes: ''
   });
   const [isSoulAssignDropdownOpen, setIsSoulAssignDropdownOpen] = useState(false);
 
@@ -95,7 +97,6 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [isAddingEqNeed, setIsAddingEqNeed] = useState(false);
   const [newEqNeed, setNewEqNeed] = useState({ item_name: '', priority: 'MOYENNE' });
 
-  // 🔴 ÉTATS DÉNOMBREMENT CORRIGÉS
   const [headcounts, setHeadcounts] = useState<any[]>([]);
   const [isAddingHeadcount, setIsAddingHeadcount] = useState(false);
   const [isProgramDropdownOpen, setIsProgramDropdownOpen] = useState(false);
@@ -197,8 +198,8 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       if (dept?.church_id) {
         const { data: cPrograms } = await supabase.from('church_programs').select('*').eq('church_id', dept.church_id);
         const sortedPrograms = (cPrograms || []).sort((a, b) => new Date(a.date || a.start_time || a.created_at).getTime() - new Date(b.date || b.start_time || b.created_at).getTime());
-        setAllChurchPrograms(sortedPrograms); // Stocke tous les programmes
-        setChurchPrograms(sortedPrograms.filter(cp => !formattedPlannings.some(dp => dp.church_program_id === cp.id))); // Stocke ceux non assignés
+        setAllChurchPrograms(sortedPrograms); 
+        setChurchPrograms(sortedPrograms.filter(cp => !formattedPlannings.some(dp => dp.church_program_id === cp.id))); 
       }
 
       const { data: rawAnns } = await supabase.from('department_announcements').select('*').eq('department_id', deptId).order('created_at', { ascending: false });
@@ -211,9 +212,20 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
 
   const handleStatusUpdate = async (id: string, status: 'APPROVED' | 'REJECTED') => { await supabase.from('department_members').update({ status, updated_at: new Date().toISOString() }).eq('id', id); loadInitialData(); };
   const handleRemoveMemberFromDept = async (id: string) => { Alert.alert("Exclure", "Voulez-vous retirer ce membre ?", [ { text: "Annuler", style: "cancel" }, { text: "Oui", style: 'destructive', onPress: async () => { await supabase.from('department_members').delete().eq('id', id); setSelectedMember(null); loadInitialData(); }} ]); };
-  const handleCreateGroup = async () => { if (!newGroupName.trim()) return; setCreatingGroup(true); const { error } = await supabase.from('department_groups').insert({ department_id: deptId, name: newGroupName.trim() }); setCreatingGroup(false); setNewGroupName(''); if(error) Alert.alert("Erreur", error.message); else { Alert.alert("Succès", "Créé avec succès !"); loadInitialData(); } };
+  
+  const handleCreateGroup = async () => { 
+    if (!newGroupName.trim()) return; 
+    setCreatingGroup(true); 
+    const { error } = await supabase.from('department_groups').insert({ department_id: deptId, name: newGroupName.trim() }); 
+    setCreatingGroup(false); 
+    setNewGroupName(''); 
+    if(error) Alert.alert("Erreur", error.message); 
+    else { Alert.alert("Succès", "Créé avec succès !"); loadInitialData(); } 
+  };
+
   const handleAddSong = async () => { if (!newSong.title.trim()) return Alert.alert("Erreur", "Le titre est obligatoire."); const { data: { user } } = await supabase.auth.getUser(); await supabase.from('department_songs').insert({ department_id: deptId, title: newSong.title.trim(), musical_key: newSong.key.trim() || null, video_url: newSong.url.trim() || null, created_by: user?.id }); setIsAddingSong(false); setNewSong({ title: '', key: '', url: '' }); loadInitialData(); };
   const openVideo = (url: string) => { if (url) Linking.openURL(url.startsWith('http') ? url : `https://${url}`).catch(() => Alert.alert("Erreur", "Lien invalide.")); };
+  
   const handleAddFinance = async () => {
     if (!newFinance.amount || isNaN(Number(newFinance.amount))) return Alert.alert("Erreur", "Montant invalide.");
     if (newFinance.type === 'EXPENSE' && !newFinance.motif.trim()) return Alert.alert("Erreur", "Le motif est requis.");
@@ -221,6 +233,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     await supabase.from('department_finances').insert({ department_id: deptId, type: newFinance.type, category: newFinance.type === 'INCOME' ? newFinance.category : 'Dépense', amount: Number(newFinance.amount), motif: newFinance.motif.trim() || null, member_id: newFinance.member_id || null, created_by: user?.id });
     setIsAddingFinance(false); setNewFinance({ type: 'INCOME', category: 'Mensuelle', amount: '', motif: '', member_id: '' }); loadInitialData(); 
   };
+
   const handleAddAnnouncement = async () => {
     if (!newAnnouncement.title.trim() || !newAnnouncement.content.trim()) return Alert.alert("Erreur", "Titre et contenu obligatoires.");
     const { data: { user } } = await supabase.auth.getUser();
@@ -233,6 +246,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     }
     setIsAddingAnnouncement(false); setNewAnnouncement({ title: '', content: '', concerns_all: true, selected_groups: [] }); loadInitialData();
   };
+
   const handleAddPlanning = async (isJoiningChurchProgram: boolean = false, autoChurchProg?: any) => {
     if (!isJoiningChurchProgram && (!newPlanning.title.trim() || !newPlanning.date || !newPlanning.time)) return Alert.alert("Erreur", "Requis.");
     const { data: { user } } = await supabase.auth.getUser();
@@ -265,6 +279,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     else { Alert.alert("Succès", "Enfant ajouté !"); setIsAddingChild(false); setNewChild({ first_name: '', last_name: '', class_id: '', parent_name: '', parent_phone: '' }); loadInitialData(); }
   };
 
+  // --- ACTIONS ÂMES (SOULS) ---
   const takePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Désolé', 'Permission caméra requise !');
@@ -277,6 +292,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true });
     if (!result.canceled && result.assets[0].base64) setNewSoul({ ...newSoul, photo_url: `data:image/jpeg;base64,${result.assets[0].base64}` });
   };
+
   const handleAddSoul = async () => {
     if (!newSoul.first_name.trim() || !newSoul.last_name.trim()) return Alert.alert("Erreur", "Le nom et prénom sont obligatoires.");
     const { data: { user } } = await supabase.auth.getUser();
@@ -289,6 +305,38 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     setIsAddingSoul(false); loadInitialData();
   };
 
+  // 🔴 NOUVEAU : Fonction pour demander l'intégration d'une âme
+  const handleRequestIntegration = async (soul: any) => {
+    Alert.alert(
+      "Demande d'intégration",
+      "Voulez-vous soumettre cette âme au pasteur pour qu'elle devienne un membre officiel de l'église ?",
+      [
+        { text: "Annuler", style: "cancel" },
+        { 
+          text: "Oui, soumettre", 
+          onPress: async () => {
+            setLoading(true);
+            try {
+              // 1. Mettre à jour UNIQUEMENT le statut dans le département
+              await supabase.from('department_souls').update({
+                integration_status: 'PENDING',
+                integration_notes: 'En attente de validation pastorale'
+              }).eq('id', soul.id);
+
+              Alert.alert('Succès', 'La demande a été transmise au pasteur.');
+              setIsAddingSoul(false);
+              loadInitialData();
+            } catch (e: any) {
+              Alert.alert('Erreur', e.message);
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // --- ACTIONS PROJETS / TACHES / EQ ---
   const handleAddProject = async () => { if (!newProject.name.trim()) return; const { data: { user } } = await supabase.auth.getUser(); await supabase.from('department_projects').insert({ department_id: deptId, name: newProject.name.trim(), description: newProject.description.trim(), created_by: user?.id }); setIsAddingProject(false); setNewProject({ name: '', description: '' }); loadInitialData(); };
   const handleAddTask = async () => {
     if (!newTask.title.trim() || !selectedProjectId) return Alert.alert("Erreur", "Titre requis.");
@@ -311,7 +359,6 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     setIsAssigningRole(false); setNewRole({ user_id: '', role_name: '' }); loadInitialData();
   };
 
-  // 🔴 ACTIONS DENOMBREMENT LIÉ AUX PROGRAMMES
   const handleAddHeadcount = async () => {
     if (!newHeadcount.church_program_id) return Alert.alert("Erreur", "Veuillez sélectionner un programme de l'église.");
     const m = parseInt(newHeadcount.men_count) || 0;
@@ -444,7 +491,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <View style={{ flex: 1 }}>
           {currentView === 'HUB' && <HubMenu />}
 
-          {/* 🔴 VUE DÉNOMBREMENT */}
+          {/* VUE DÉNOMBREMENT */}
           {currentView === 'HEADCOUNTS' && (
             <View style={{ flex: 1 }}>
               <View style={styles.financeHeader}>
@@ -531,12 +578,12 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
             </View>
           )}
 
-          {/* VUE SUIVI DES ÂMES */}
+          {/* 🔴 VUE SUIVI DES ÂMES (EVANGELISATION) */}
           {currentView === 'SOULS' && (
             <View style={{ flex: 1 }}>
               <View style={styles.financeHeader}>
                 <Text style={styles.hubSubtitle}>Suivi des Âmes</Text>
-                <TouchableOpacity style={[styles.addFinanceBtn, { backgroundColor: '#f97316' }]} onPress={() => { setNewSoul({ id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '', is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false }); setIsAddingSoul(true); }}>
+                <TouchableOpacity style={[styles.addFinanceBtn, { backgroundColor: '#f97316' }]} onPress={() => { setNewSoul({ id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '', is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false, integration_status: 'NONE', integration_notes: '' }); setIsAddingSoul(true); }}>
                   <Text style={styles.addFinanceBtnText}>+ Ajouter une âme</Text>
                 </TouchableOpacity>
               </View>
@@ -547,10 +594,28 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                     <View style={styles.soulInfo}>
                       <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
                         <Text style={styles.soulName}>{item.first_name} {item.last_name}</Text>
-                        <TouchableOpacity onPress={() => { setNewSoul({ ...item, phone: item.phone || '', address: item.address || '', profession: item.profession || '', assigned_to: item.assigned_to || '', photo_url: item.photo_url || '', regularity: item.regularity || 'Faible', observations: item.observations || '' }); setIsAddingSoul(true); }} style={styles.soulEditBtn}><Text style={styles.soulEditBtnText}>✏️ Suivi</Text></TouchableOpacity>
+                        <TouchableOpacity onPress={() => { setNewSoul({ ...item, phone: item.phone || '', address: item.address || '', profession: item.profession || '', assigned_to: item.assigned_to || '', photo_url: item.photo_url || '', regularity: item.regularity || 'Faible', observations: item.observations || '', integration_status: item.integration_status || 'NONE', integration_notes: item.integration_notes || '' }); setIsAddingSoul(true); }} style={styles.soulEditBtn}><Text style={styles.soulEditBtnText}>✏️ Suivi</Text></TouchableOpacity>
                       </View>
                       <Text style={styles.soulDetail}>📍 {item.address || 'Adresse inconnue'}</Text>
                       {item.phone && <TouchableOpacity onPress={() => Linking.openURL(`tel:${item.phone}`)} style={{marginTop: 4}}><Text style={styles.soulPhone}>📞 {item.phone}</Text></TouchableOpacity>}
+                      
+                      {/* BADGES D'INTÉGRATION */}
+                      {item.integration_status === 'PENDING' && (
+                        <View style={{marginTop: 5, alignSelf: 'flex-start', backgroundColor: '#fef3c7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4}}>
+                          <Text style={{fontSize: 9, fontWeight: 'bold', color: '#d97706'}}>⏳ En attente pasteur</Text>
+                        </View>
+                      )}
+                      {item.integration_status === 'REJECTED' && (
+                        <View style={{marginTop: 5, alignSelf: 'flex-start', backgroundColor: '#fee2e2', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4}}>
+                          <Text style={{fontSize: 9, fontWeight: 'bold', color: '#ef4444'}}>❌ Intégration Refusée</Text>
+                        </View>
+                      )}
+                      {item.integration_status === 'INTEGRATED' && (
+                        <View style={{marginTop: 5, alignSelf: 'flex-start', backgroundColor: '#dcfce3', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4}}>
+                          <Text style={{fontSize: 9, fontWeight: 'bold', color: '#16a34a'}}>✅ Fidèle Officiel</Text>
+                        </View>
+                      )}
+
                     </View>
                   </View>
                   <View style={{paddingHorizontal: 15, paddingBottom: 10, flexDirection: 'row', gap: 5}}>
@@ -567,7 +632,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
             </View>
           )}
 
-          {/* VUE ENFANTS REDESIGNÉE */}
+          {/* VUE ENFANTS */}
           {currentView === 'CHILDREN' && (
             <View style={{ flex: 1 }}>
               {isLeader && (
@@ -762,15 +827,12 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         </View>
       )}
 
-      {/* --- MODALES CENTRALISÉES (SANS DOUBLONS) --- */}
-      
-      {/* 🔴 MODALE DÉNOMBREMENT LIÉE AUX PROGRAMMES */}
+      {/* --- MODALES --- */}
       <Modal visible={isAddingHeadcount} transparent animationType="slide">
         <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalContentBottom, {maxHeight: '90%'}]}>
             <View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Rapport de Présence</Text><TouchableOpacity onPress={() => setIsAddingHeadcount(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View>
             <ScrollView showsVerticalScrollIndicator={false}>
-              
               <View style={{ zIndex: 10 }}>
                 <Text style={styles.inputLabel}>Programme de l'église *</Text>
                 <TouchableOpacity style={styles.dropdownSelector} onPress={() => setIsProgramDropdownOpen(!isProgramDropdownOpen)}>
@@ -809,7 +871,6 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* PLANNING MODAL CORRIGÉE (Bordures + Exclusion des groupes) */}
       <Modal visible={isAddingPlanning} transparent animationType="slide">
         <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalContentBottom, {maxHeight: '85%'}]}>
@@ -860,7 +921,6 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ASSIGN PROGRAM MODAL (Groupes exclusifs) */}
       <Modal visible={!!selectedChurchProgram} transparent animationType="slide">
         <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalContentBottom, {maxHeight: '85%'}]}>
@@ -880,7 +940,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* SUIVI AMES MODAL AVEC CHAMPS DE SUIVI */}
+      {/* 🔴 SUIVI AMES MODAL (AVEC BOUTON D'INTÉGRATION) */}
       <Modal visible={isAddingSoul} transparent animationType="slide">
         <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalContentBottom, {maxHeight: '90%'}]}>
@@ -889,6 +949,15 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
               <TouchableOpacity onPress={() => setIsAddingSoul(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity>
             </View>
             <ScrollView showsVerticalScrollIndicator={false}>
+              
+              {/* Message de refus éventuel du pasteur */}
+              {newSoul.id && newSoul.integration_status === 'REJECTED' && (
+                <View style={{backgroundColor: '#fee2e2', padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: '#f87171'}}>
+                  <Text style={{color: '#b91c1c', fontWeight: 'bold', fontSize: 13, marginBottom: 4}}>❌ Intégration refusée par le pasteur</Text>
+                  <Text style={{color: '#991b1b', fontSize: 12}}>{newSoul.integration_notes || 'Aucun motif précisé.'}</Text>
+                </View>
+              )}
+
               <View style={{ alignItems: 'center', marginBottom: 20 }}>
                 {newSoul.photo_url ? (<Image source={{ uri: newSoul.photo_url }} style={styles.soulAvatar} />) : (<View style={styles.soulAvatarPlaceholder}><Text style={{fontSize: 30}}>👤</Text></View>)}
                 <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
@@ -904,7 +973,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
               </View>
               <Text style={styles.inputLabel}>Téléphone</Text><TextInput style={styles.formInput} keyboardType="phone-pad" value={newSoul.phone} onChangeText={t => setNewSoul({...newSoul, phone: t})} />
               
-              {newSoul.id && (
+              {newSoul.id ? (
                 <>
                   <Text style={[styles.sectionTitle, {marginTop: 20}]}>Journal de Suivi</Text>
                   <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, padding: 10, backgroundColor: '#f8fafc', borderRadius: 10}}>
@@ -925,15 +994,36 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                   </View>
                   <Text style={styles.inputLabel}>Observations</Text>
                   <TextInput style={[styles.formInput, {height: 80, textAlignVertical: 'top'}]} multiline value={newSoul.observations} onChangeText={t => setNewSoul({...newSoul, observations: t})} placeholder="Notes du responsable..." />
+                  
+                  {/* BOUTONS D'ACTIONS (SOUL EXISTANTE) */}
+                  <View style={{marginTop: 30, marginBottom: 40, gap: 15}}>
+                    <TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#f97316'}]} onPress={handleAddSoul}>
+                      <Text style={styles.modalBtnSubmitText}>Sauvegarder le Suivi</Text>
+                    </TouchableOpacity>
+
+                    {/* 🔴 BOUTON DEMANDE INTÉGRATION (Si pas déjà PENDING ou INTEGRATED) */}
+                    {(newSoul.integration_status === 'NONE' || newSoul.integration_status === 'REJECTED' || !newSoul.integration_status) && (
+                      <TouchableOpacity 
+                        style={{backgroundColor: '#0f172a', padding: 15, borderRadius: 12, alignItems: 'center'}} 
+                        onPress={() => handleRequestIntegration(newSoul)}
+                      >
+                        <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 14}}>Dossier mâture : Demander l'intégration ➔</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 </>
+              ) : (
+                <View style={[styles.modalActionsRow, {marginBottom: 40, marginTop: 20}]}>
+                  <TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#f97316'}]} onPress={handleAddSoul}>
+                    <Text style={styles.modalBtnSubmitText}>Enregistrer la nouvelle âme</Text>
+                  </TouchableOpacity>
+                </View>
               )}
-              <View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#f97316'}]} onPress={handleAddSoul}><Text style={styles.modalBtnSubmitText}>{newSoul.id ? 'Sauvegarder le Suivi' : 'Enregistrer la nouvelle âme'}</Text></TouchableOpacity></View>
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* AUTRES PETITES MODALES (Tâches, Projets, Equipements, Annonces, Membres) */}
       <Modal visible={isAddingTask} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Nouvelle Tâche</Text><TouchableOpacity onPress={() => setIsAddingTask(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView><Text style={styles.inputLabel}>Titre *</Text><TextInput style={styles.formInput} placeholder="Ex: Monter le teaser" onChangeText={t => setNewTask({...newTask, title: t})} /><Text style={styles.inputLabel}>Deadline (Optionnel)</Text><TouchableOpacity style={styles.formInput} onPress={() => setShowTaskDatePicker(true)}><Text style={{color: newTask.deadline ? '#0f172a' : '#94a3b8'}}>{newTask.deadline || "Sélectionner une date"}</Text></TouchableOpacity>{showTaskDatePicker && (<DateTimePicker value={new Date()} mode="date" display="default" onChange={(e, d) => { setShowTaskDatePicker(false); if (d) setNewTask({...newTask, deadline: d.toISOString().split('T')[0]}); }} />)}<View style={{ zIndex: 10, marginTop: 15 }}><Text style={styles.inputLabel}>Assigner à</Text><TouchableOpacity style={styles.dropdownSelector} onPress={() => setIsMemberDropdownOpen(!isMemberDropdownOpen)}><Text style={newTask.assigned_to ? styles.dropdownTextSelected : styles.dropdownTextPlaceholder}>{newTask.assigned_to ? activeMembers.find(m => m.user_id === newTask.assigned_to)?.member.full_name : "-- Non assigné --"}</Text><Text style={{ color: '#94a3b8' }}>▼</Text></TouchableOpacity>{isMemberDropdownOpen && (<View style={styles.dropdownContainer}><ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled><TouchableOpacity style={styles.dropdownItem} onPress={() => { setNewTask({...newTask, assigned_to: ''}); setIsMemberDropdownOpen(false); }}><Text style={styles.dropdownItemText}>-- Personne --</Text></TouchableOpacity>{activeMembers.map(m => (<TouchableOpacity key={m.id} style={styles.dropdownItem} onPress={() => { setNewTask({...newTask, assigned_to: m.user_id}); setIsMemberDropdownOpen(false); }}><Text style={styles.dropdownItemText}>{m.member.full_name}</Text></TouchableOpacity>))}</ScrollView></View>)}</View><View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#3b82f6'}]} onPress={handleAddTask}><Text style={styles.modalBtnSubmitText}>Créer la tâche</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
       <Modal visible={isAssigningRole} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Assigner un poste</Text><TouchableOpacity onPress={() => setIsAssigningRole(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView showsVerticalScrollIndicator={false}><Text style={styles.inputLabel}>Intitulé du poste *</Text><TextInput style={styles.formInput} placeholder="Ex: Caméra 1, Régie, Son..." onChangeText={t => setNewRole({...newRole, role_name: t})} /><View style={{ zIndex: 10 }}><Text style={styles.inputLabel}>Membre à assigner *</Text><TouchableOpacity style={styles.dropdownSelector} onPress={() => setIsSoulAssignDropdownOpen(!isSoulAssignDropdownOpen)}><Text style={newRole.user_id ? styles.dropdownTextSelected : styles.dropdownTextPlaceholder}>{newRole.user_id ? activeMembers.find(m => m.user_id === newRole.user_id)?.member.full_name : "-- Choisir --"}</Text><Text style={{ color: '#94a3b8' }}>▼</Text></TouchableOpacity>{isSoulAssignDropdownOpen && (<View style={styles.dropdownContainer}><ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled>{activeMembers.map(m => (<TouchableOpacity key={m.id} style={styles.dropdownItem} onPress={() => { setNewRole({...newRole, user_id: m.user_id}); setIsSoulAssignDropdownOpen(false); }}><Text style={styles.dropdownItemText}>{m.member.full_name}</Text></TouchableOpacity>))}</ScrollView></View>)}</View><View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#3b82f6'}]} onPress={handleAssignRole}><Text style={styles.modalBtnSubmitText}>Assigner</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
       <Modal visible={isAddingProject} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Nouveau Projet</Text><TouchableOpacity onPress={() => setIsAddingProject(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView><Text style={styles.inputLabel}>Nom du projet *</Text><TextInput style={styles.formInput} placeholder="Ex: Culte de Pâques" onChangeText={t => setNewProject({...newProject, name: t})} /><Text style={styles.inputLabel}>Description</Text><TextInput style={styles.formInput} placeholder="Objectif..." onChangeText={t => setNewProject({...newProject, description: t})} /><View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#8b5cf6'}]} onPress={handleAddProject}><Text style={styles.modalBtnSubmitText}>Créer</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
@@ -943,7 +1033,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       <Modal visible={isAddingFinance} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Transaction</Text><TouchableOpacity onPress={() => setIsAddingFinance(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView><View style={styles.financeToggleRow}><TouchableOpacity style={[styles.financeToggleBtn, newFinance.type === 'INCOME' && styles.financeToggleActiveIn]} onPress={() => setNewFinance({...newFinance, type: 'INCOME'})}><Text style={[styles.financeToggleText, newFinance.type === 'INCOME' && { color: '#fff' }]}>📥 Entrée</Text></TouchableOpacity><TouchableOpacity style={[styles.financeToggleBtn, newFinance.type === 'EXPENSE' && styles.financeToggleActiveOut]} onPress={() => setNewFinance({...newFinance, type: 'EXPENSE'})}><Text style={[styles.financeToggleText, newFinance.type === 'EXPENSE' && { color: '#fff' }]}>💸 Sortie</Text></TouchableOpacity></View>{newFinance.type === 'INCOME' && (<View style={styles.financeCategoryRow}>{['Mensuelle', 'Régionale', 'Événement local'].map(cat => (<TouchableOpacity key={cat} style={[styles.catPill, newFinance.category === cat && styles.catPillActive]} onPress={() => setNewFinance({...newFinance, category: cat})}><Text style={[styles.catPillText, newFinance.category === cat && { color: '#fff' }]}>{cat}</Text></TouchableOpacity>))}</View>)}<Text style={styles.inputLabel}>Montant *</Text><TextInput style={styles.formInput} keyboardType="numeric" onChangeText={t => setNewFinance({...newFinance, amount: t})} /><Text style={styles.inputLabel}>Motif</Text><TextInput style={styles.formInput} onChangeText={t => setNewFinance({...newFinance, motif: t})} /><View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddFinance}><Text style={styles.modalBtnSubmitText}>Valider</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
       <Modal visible={isAddingAnnouncement} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Publier une annonce</Text><TouchableOpacity onPress={() => setIsAddingAnnouncement(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView showsVerticalScrollIndicator={false}><Text style={styles.inputLabel}>Sujet *</Text><TextInput style={styles.formInput} placeholder="Ex: Réunion annulée..." onChangeText={t => setNewAnnouncement({...newAnnouncement, title: t})} /><Text style={styles.inputLabel}>Contenu *</Text><TextInput style={[styles.formInput, {height: 80, textAlignVertical: 'top'}]} multiline onChangeText={t => setNewAnnouncement({...newAnnouncement, content: t})} />{hasSubGroups && (<View style={{ marginTop: 20 }}><Text style={styles.inputLabel}>Destinataires :</Text><View style={styles.financeToggleRow}><TouchableOpacity style={[styles.financeToggleBtn, newAnnouncement.concerns_all && {backgroundColor: '#ec4899'}]} onPress={() => setNewAnnouncement({...newAnnouncement, concerns_all: true, selected_groups: []})}><Text style={[styles.financeToggleText, newAnnouncement.concerns_all && {color: '#fff'}]}>Tout le département</Text></TouchableOpacity><TouchableOpacity style={[styles.financeToggleBtn, !newAnnouncement.concerns_all && {backgroundColor: '#ec4899'}]} onPress={() => setNewAnnouncement({...newAnnouncement, concerns_all: false})}><Text style={[styles.financeToggleText, !newAnnouncement.concerns_all && {color: '#fff'}]}>Groupes spécifiques</Text></TouchableOpacity></View>{!newAnnouncement.concerns_all && (<View style={styles.groupCheckboxContainer}>{groups.map(g => { const isSelected = newAnnouncement.selected_groups.includes(g.id); return (<TouchableOpacity key={g.id} style={[styles.groupCheckbox, isSelected && {borderColor: '#db2777', backgroundColor: '#fdf2f8'}]} onPress={() => setNewAnnouncement(prev => ({...prev, selected_groups: isSelected ? prev.selected_groups.filter(id=>id!==g.id) : [...prev.selected_groups, g.id]}))}><Text style={[styles.groupCheckboxText, isSelected && {color: '#db2777'}]}>{isSelected ? '✓ ' : '+ '}{g.name}</Text></TouchableOpacity>)})}</View>)}</View>)}<View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#ec4899'}]} onPress={handleAddAnnouncement}><Text style={styles.modalBtnSubmitText}>Envoyer le communiqué</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
       <Modal visible={isAddingSong} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Ajouter au répertoire</Text><TouchableOpacity onPress={() => setIsAddingSong(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView><Text style={styles.inputLabel}>Titre *</Text><TextInput style={styles.formInput} onChangeText={t => setNewSong({...newSong, title: t})} /><Text style={styles.inputLabel}>Gamme</Text><TextInput style={styles.formInput} onChangeText={t => setNewSong({...newSong, key: t})} /><Text style={styles.inputLabel}>Lien YouTube</Text><TextInput style={styles.formInput} autoCapitalize="none" onChangeText={t => setNewSong({...newSong, url: t})} /><View style={[styles.modalActionsRow, {marginBottom: 20}]}><TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddSong}><Text style={styles.modalBtnSubmitText}>Enregistrer</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
-      <Modal visible={!!selectedMember && currentView === 'MEMBERS' && hasSubGroups} transparent animationType="fade"><View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>Gestion : {selectedMember?.member?.full_name}</Text><ScrollView style={{ maxHeight: 250, width: '100%' }}><TouchableOpacity style={styles.modalOption} onPress={async () => { await supabase.from('department_groups').update({ leader_id: null }).eq('leader_id', selectedMember.user_id); setSelectedMember(null); loadInitialData(); }}><Text style={styles.modalOptionText}>❌ Retirer de la direction</Text></TouchableOpacity>{groups.map(g => { const isAlreadyLeader = g.leader_id === selectedMember?.user_id; return (<TouchableOpacity key={g.id} style={[styles.modalOption, isAlreadyLeader && { borderColor: '#10b981', backgroundColor: '#ecfdf5' }]} onPress={async () => { const { error } = await supabase.from('department_groups').update({ leader_id: selectedMember.user_id }).eq('id', g.id); setSelectedMember(null); if (!error) loadInitialData(); }}><Text style={[styles.modalOptionText, isAlreadyLeader ? { color: '#10b981', fontWeight: 'bold' } : { color: '#3b82f6', fontWeight: 'bold' }]}>{isAlreadyLeader ? `✅ Dirige déjà ${g.name}` : `👑 Nommer chef de ${g.name}`}</Text></TouchableOpacity>); })}</ScrollView><TouchableOpacity style={styles.modalCancel} onPress={() => setSelectedMember(null)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity></View></View></Modal>
+      <Modal visible={!!selectedMember && currentView === 'MEMBERS' && hasSubGroups} transparent animationType="fade"><View style={styles.modalOverlay}><View style={styles.modalContent}><Text style={styles.modalTitle}>Gestion : {selectedMember?.member?.full_name}</Text><ScrollView style={{ maxHeight: 250, width: '100%' }}><TouchableOpacity style={styles.modalOption} onPress={async () => { await supabase.from('department_groups').update({ leader_id: null }).eq('leader_id', selectedMember.user_id); setSelectedMember(null); loadInitialData(); }}><Text style={styles.modalOptionText}>❌ Retirer de la direction</Text></TouchableOpacity>{groups.map(g => { const isAlreadyLeader = g.leader_id === selectedMember?.user_id; return (<TouchableOpacity key={g.id} style={[styles.modalOption, isAlreadyLeader && { borderColor: '#10b981', backgroundColor: '#ecfdf5' }]} onPress={async () => { const { error } = await supabase.from('department_groups').update({ leader_id: selectedMember.user_id }).eq('id', g.id); setSelectedMember(null); if (!error) loadInitialData(); }}><Text style={[styles.modalOptionText, isAlreadyLeader ? { color: '#10b981', fontWeight: 'bold' } : { color: '#3b82f6', fontWeight: 'bold' }]}>{isAlreadyLeader ? `✅ Dirige ${g.name}` : `👑 Nommer chef de ${g.name}`}</Text></TouchableOpacity>); })}</ScrollView><TouchableOpacity style={styles.modalCancel} onPress={() => setSelectedMember(null)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity></View></View></Modal>
     </View>
   );
 }
@@ -1065,7 +1155,6 @@ const styles = StyleSheet.create({
   modalCancel: { marginTop: 10, padding: 15 },
   modalCancelText: { color: '#ef4444', fontWeight: 'bold', fontSize: 15 },
 
-  // STYLES ENFANTS REDESIGNES
   newChildCard: { backgroundColor: '#fff', borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden' },
   newChildTop: { flexDirection: 'row', padding: 15, alignItems: 'center' },
   childAvatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#f1f5f9', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
@@ -1076,7 +1165,6 @@ const styles = StyleSheet.create({
   parentTitle: { fontSize: 11, fontWeight: 'bold', color: '#64748b' },
   parentPhone: { fontSize: 13, color: '#3b82f6', fontWeight: 'bold' },
   
-  // STYLES ÂMES
   soulCard: { backgroundColor: '#fff', borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: '#fed7aa', overflow: 'hidden' },
   soulCardTop: { flexDirection: 'row', padding: 15, alignItems: 'center' },
   soulAvatar: { width: 60, height: 60, borderRadius: 30, marginRight: 15, backgroundColor: '#f1f5f9' },
@@ -1095,7 +1183,6 @@ const styles = StyleSheet.create({
   photoBtn: { backgroundColor: '#f1f5f9', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0' },
   photoBtnText: { fontSize: 12, fontWeight: 'bold', color: '#475569' },
 
-  // STYLES KANBAN
   classPill: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, marginRight: 10 },
   classPillActive: { backgroundColor: '#f43f5e', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, marginRight: 10 },
   classPillText: { color: '#64748b', fontSize: 12, fontWeight: 'bold' },
