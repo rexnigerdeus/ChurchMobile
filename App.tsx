@@ -27,7 +27,6 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'HOME' | 'FINANCE' | 'APPOINTMENT' | 'PRAYER_REQUEST' | 'PASTOR_DASHBOARD' | 'SECRETARIAT_DASHBOARD' | 'DEPARTMENT_DASHBOARD' | 'SUBGROUP_DASHBOARD'>('HOME');
   
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  // 🔴 NOUVEAU : ID du département sélectionné
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -40,9 +39,18 @@ export default function App() {
     setSession(currentSession);
     if (currentSession) {
       const { data } = await supabase.from('user_roles').select('role').eq('user_id', currentSession.user.id).single();
-      setUserRole(data?.role || null);
+      const role = data?.role || null;
+      setUserRole(role);
+      
+      // 🔴 LOGIQUE DE BYPASS : Redirection directe pour le pasteur
+      if (role === 'CHURCH_LEADER') {
+        setCurrentView('PASTOR_DASHBOARD');
+      } else {
+        setCurrentView('HOME');
+      }
     } else {
-      setUserRole(null); setCurrentView('HOME');
+      setUserRole(null); 
+      setCurrentView('HOME');
     }
     setIsReady(true);
   }
@@ -61,7 +69,6 @@ export default function App() {
       ) : currentView === 'FINANCE' ? (
         <FinanceScreen onBack={() => setCurrentView('HOME')} />
       ) : currentView === 'DEPARTMENT_DASHBOARD' && selectedDeptId ? (
-        // 🔴 CORRECTION : On passe l'ID du département à l'écran
         <DepartmentDashboardScreen onBack={() => setCurrentView('HOME')} deptId={selectedDeptId} />
       ) : currentView === 'SUBGROUP_DASHBOARD' && selectedGroupId ? (
         <SubGroupDashboardScreen onBack={() => setCurrentView('HOME')} groupId={selectedGroupId} />
@@ -83,7 +90,6 @@ export default function App() {
         onNavigateToSecretariat={() => setCurrentView('SECRETARIAT_DASHBOARD')}
         onNavigateToFinance={() => setCurrentView('FINANCE')}
         onNavigateToSubGroup={(id: string) => { setSelectedGroupId(id); setCurrentView('SUBGROUP_DASHBOARD'); }}
-        // 🔴 NOUVEAU : Navigation vers un département
         onNavigateToDepartment={(id: string) => { setSelectedDeptId(id); setCurrentView('DEPARTMENT_DASHBOARD'); }}
       />
     )}
