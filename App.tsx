@@ -1,9 +1,12 @@
 // App.tsx
 import React, { useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView, ActivityIndicator, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaView, ActivityIndicator, View, Platform, ScrollView, StyleSheet } from 'react-native';
 import { supabase } from './src/lib/supabase';
+import { storage } from './src/lib/storage';
+import { useResponsive } from './src/hooks/useResponsive';
+import { useRegisterServiceWorker } from './src/hooks/useRegisterServiceWorker';
+import { injectPwaMeta } from './src/lib/pwa-meta';
 
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -30,7 +33,7 @@ export default function App() {
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
 
   useEffect(() => {
-    AsyncStorage.getItem('needsPasswordChange').then(val => { if (val === 'true') setNeedsPasswordChange(true); });
+    storage.getItem('needsPasswordChange').then(val => { if (val === 'true') setNeedsPasswordChange(true); });
     supabase.auth.getSession().then(({ data: { session } }) => { handleSession(session); });
     supabase.auth.onAuthStateChange((_event, session) => { handleSession(session); });
   }, []);
@@ -55,45 +58,105 @@ export default function App() {
     setIsReady(true);
   }
 
-  const handleTempLogin = async () => { setNeedsPasswordChange(true); await AsyncStorage.setItem('needsPasswordChange', 'true'); };
-  const handlePasswordChanged = async () => { setNeedsPasswordChange(false); await AsyncStorage.removeItem('needsPasswordChange'); };
+  const handleTempLogin = async () => { setNeedsPasswordChange(true); await storage.setItem('needsPasswordChange', 'true'); };
+  const handlePasswordChanged = async () => { setNeedsPasswordChange(false); await storage.removeItem('needsPasswordChange'); };
+
+  const { isLargeScreen, contentMaxWidth, horizontalPadding } = useResponsive();
+  useRegisterServiceWorker();
+
+  useEffect(() => {
+    injectPwaMeta();
+  }, []);
 
   if (!isReady) return (<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator size="large" color="#0f172a" /></View>);
 
+  // Sur grand écran (web/desktop/tablette) on centre le contenu mobile-first dans
+  // un conteneur ScrollView pour reproduire l'expérience d'un téléphone.
+  const Screen = !session ? (
+    authView === 'LOGIN' ? <LoginScreen onTempLogin={handleTempLogin} onNavigateToRegister={() => setAuthView('REGISTER')} /> : <RegisterScreen onNavigateToLogin={() => setAuthView('LOGIN')} />
+  ) : needsPasswordChange ? (
+    <ForceChangePasswordScreen onPasswordChanged={handlePasswordChanged} />
+  ) : currentView === 'FINANCE' ? (
+    <FinanceScreen onBack={() => setCurrentView('HOME')} />
+  ) : currentView === 'DEPARTMENT_DASHBOARD' && selectedDeptId ? (
+    <DepartmentDashboardScreen onBack={() => setCurrentView('HOME')} deptId={selectedDeptId} />
+  ) : currentView === 'SUBGROUP_DASHBOARD' && selectedGroupId ? (
+    <SubGroupDashboardScreen onBack={() => setCurrentView('HOME')} groupId={selectedGroupId} />
+  ) : currentView === 'APPOINTMENT' ? (
+    <AppointmentScreen onBack={() => setCurrentView('HOME')} />
+  ) : currentView === 'PRAYER_REQUEST' ? (
+    <PrayerRequestScreen onBack={() => setCurrentView('HOME')} />
+  ) : currentView === 'PASTOR_DASHBOARD' ? (
+    <PastorDashboardScreen onBack={() => setCurrentView('HOME')} />
+  ) : currentView === 'SECRETARIAT_DASHBOARD' ? (
+    <SecretariatDashboardScreen onBack={() => setCurrentView('HOME')} />
+  ) :
+  (
+    <HomeScreen
+      userRole={userRole}
+      onNavigateToAppointment={() => setCurrentView('APPOINTMENT')}
+      onNavigateToPrayer={() => setCurrentView('PRAYER_REQUEST')}
+      onNavigateToPastor={() => setCurrentView('PASTOR_DASHBOARD')}
+      onNavigateToSecretariat={() => setCurrentView('SECRETARIAT_DASHBOARD')}
+      onNavigateToFinance={() => setCurrentView('FINANCE')}
+      onNavigateToSubGroup={(id: string) => { setSelectedGroupId(id); setCurrentView('SUBGROUP_DASHBOARD'); }}
+      onNavigateToDepartment={(id: string) => { setSelectedDeptId(id); setCurrentView('DEPARTMENT_DASHBOARD'); }}
+    />
+  );
+
+  // En mobile natif, on rend l'écran plein pot. En web on centre dans un "phone frame".
+  if (Platform.OS === 'web' && isLargeScreen) {
+    return (
+      <View style={styles.webShell}>
+        <ScrollView contentContainerStyle={styles.webScroll}>
+          <View
+            style={[
+              styles.phoneFrame,
+              {
+                maxWidth: contentMaxWidth,
+                paddingHorizontal: horizontalPadding,
+              },
+            ]}
+          >
+            {Screen}
+            <StatusBar style="auto" />
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f8fafc' }}>
-      {!session ? (
-        authView === 'LOGIN' ? <LoginScreen onTempLogin={handleTempLogin} onNavigateToRegister={() => setAuthView('REGISTER')} /> : <RegisterScreen onNavigateToLogin={() => setAuthView('LOGIN')} />
-      ) : needsPasswordChange ? (
-        <ForceChangePasswordScreen onPasswordChanged={handlePasswordChanged} />
-      ) : currentView === 'FINANCE' ? (
-        <FinanceScreen onBack={() => setCurrentView('HOME')} />
-      ) : currentView === 'DEPARTMENT_DASHBOARD' && selectedDeptId ? (
-        <DepartmentDashboardScreen onBack={() => setCurrentView('HOME')} deptId={selectedDeptId} />
-      ) : currentView === 'SUBGROUP_DASHBOARD' && selectedGroupId ? (
-        <SubGroupDashboardScreen onBack={() => setCurrentView('HOME')} groupId={selectedGroupId} />
-      ) : currentView === 'APPOINTMENT' ? (
-        <AppointmentScreen onBack={() => setCurrentView('HOME')} />
-      ) : currentView === 'PRAYER_REQUEST' ? (
-        <PrayerRequestScreen onBack={() => setCurrentView('HOME')} />
-      ) : currentView === 'PASTOR_DASHBOARD' ? (
-        <PastorDashboardScreen onBack={() => setCurrentView('HOME')} />
-      ) : currentView === 'SECRETARIAT_DASHBOARD' ? (
-        <SecretariatDashboardScreen onBack={() => setCurrentView('HOME')} />
-      ) : 
-      (
-      <HomeScreen 
-        userRole={userRole} 
-        onNavigateToAppointment={() => setCurrentView('APPOINTMENT')} 
-        onNavigateToPrayer={() => setCurrentView('PRAYER_REQUEST')} 
-        onNavigateToPastor={() => setCurrentView('PASTOR_DASHBOARD')}
-        onNavigateToSecretariat={() => setCurrentView('SECRETARIAT_DASHBOARD')}
-        onNavigateToFinance={() => setCurrentView('FINANCE')}
-        onNavigateToSubGroup={(id: string) => { setSelectedGroupId(id); setCurrentView('SUBGROUP_DASHBOARD'); }}
-        onNavigateToDepartment={(id: string) => { setSelectedDeptId(id); setCurrentView('DEPARTMENT_DASHBOARD'); }}
-      />
-    )}
-    <StatusBar style="auto" />
+      {Screen}
+      <StatusBar style="auto" />
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  webShell: {
+    flex: 1,
+    backgroundColor: '#e2e8f0', // fond gris clair pour faire ressortir le "phone"
+    minHeight: '100vh' as any,
+  },
+  webScroll: {
+    flexGrow: 1,
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  phoneFrame: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    minHeight: 600,
+    borderRadius: 16,
+    overflow: 'hidden',
+    // Ombre légère pour donner l'effet "phone"
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    // @ts-ignore - web only
+    boxShadow: '0 4px 24px rgba(15, 23, 42, 0.08)',
+  },
+});

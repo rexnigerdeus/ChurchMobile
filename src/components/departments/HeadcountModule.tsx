@@ -5,7 +5,7 @@ import {
   TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator 
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker from '../WebDatePicker';
 
 interface HeadcountModuleProps {
   deptId: string;
@@ -26,8 +26,7 @@ export default function HeadcountModule({ deptId, churchId, isLeader }: Headcoun
     church_program_id: '', event_title: '', event_date: '', men_count: '', women_count: '', children_count: '' 
   });
   
-  const [dateObj, setDateObj] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [dateObj, setDateObj] = useState<Date | undefined>(undefined);
 
   useEffect(() => {
     loadData();
@@ -211,17 +210,18 @@ export default function HeadcountModule({ deptId, churchId, isLeader }: Headcoun
             
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.inputLabel}>Date de l'événement *</Text>
-              <TouchableOpacity style={styles.input} onPress={() => setShowDatePicker(true)}>
-                <Text style={{color: newHeadcount.event_date ? '#0f172a' : '#94a3b8'}}>{newHeadcount.event_date || "Sélectionner la date"}</Text>
-              </TouchableOpacity>
-
-              {Platform.OS === 'ios' && showDatePicker && (
-                <View style={styles.iosPickerContainer}>
-                  <View style={styles.iosPickerHeader}><TouchableOpacity onPress={() => setShowDatePicker(false)}><Text style={styles.iosPickerDoneText}>OK</Text></TouchableOpacity></View>
-                  <DateTimePicker value={dateObj} mode="date" display="spinner" locale="fr-FR" onChange={(e, d) => { if (d) { setDateObj(d); setNewHeadcount({...newHeadcount, event_date: d.toISOString().split('T')[0]}); } }} />
-                </View>
-              )}
-              {Platform.OS === 'android' && showDatePicker && (<DateTimePicker value={dateObj} mode="date" onChange={(e, d) => { setShowDatePicker(false); if (d) { setDateObj(d); setNewHeadcount({...newHeadcount, event_date: d.toISOString().split('T')[0]}); } }} />)}
+              <DateTimePicker
+                value={dateObj}
+                mode="date"
+                style={styles.input}
+                placeholder="Sélectionner la date"
+                onChange={(e, d) => {
+                  if (d) {
+                    setDateObj(d);
+                    setNewHeadcount({...newHeadcount, event_date: d.toISOString().split('T')[0]});
+                  }
+                }}
+              />
 
               <View style={{ zIndex: 10 }}>
                 <Text style={styles.inputLabel}>Programme de l'église *</Text>

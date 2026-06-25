@@ -5,7 +5,7 @@ import {
   TextInput, Modal, Linking, KeyboardAvoidingView, Platform, Image, Switch, ScrollView, Alert
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
-import * as ImagePicker from 'expo-image-picker';
+import { pickImage, uploadToSupabase } from '../WebImagePicker';
 
 interface EvangelismModuleProps {
   deptId: string;
@@ -21,7 +21,7 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
   const [isAssignDropdownOpen, setIsAssignDropdownOpen] = useState(false);
 
   const [newSoul, setNewSoul] = useState({ 
-    id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '',
+    id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '', gender: 'Homme',
     is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false,
     integration_status: 'NONE', integration_notes: ''
   });
@@ -52,25 +52,25 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
   }
 
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Désolé', 'Permission caméra requise !');
-    let result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true });
-    if (!result.canceled && result.assets[0].base64) setNewSoul({ ...newSoul, photo_url: `data:image/jpeg;base64,${result.assets[0].base64}` });
+    const picked = await pickImage({ source: 'camera', allowsEditing: true, aspect: [1, 1], quality: 0.5 });
+    if (picked?.uri) setNewSoul({ ...newSoul, photo_url: picked.uri });
   };
-  
-  const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Désolé', 'Permission galerie requise !');
-    let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true });
-    if (!result.canceled && result.assets[0].base64) setNewSoul({ ...newSoul, photo_url: `data:image/jpeg;base64,${result.assets[0].base64}` });
+
+  const pickFromGallery = async () => {
+    const picked = await pickImage({ source: 'gallery', allowsEditing: true, aspect: [1, 1], quality: 0.5 });
+    if (picked?.uri) setNewSoul({ ...newSoul, photo_url: picked.uri });
   };
 
   const handleAddSoul = async () => {
     if (!newSoul.first_name.trim() || !newSoul.last_name.trim()) {
       return Alert.alert("Erreur", "Le nom et prénom sont obligatoires.");
     }
-    const { data: { user } } = await supabase.auth.getUser();
-    
+    const resp = await supabase.auth.getUser();
+    const user = resp?.data?.user;
+    if (!user) {
+      return Alert.alert('Erreur', 'Utilisateur non authentifié.');
+    }
+
     const soulData = {
       department_id: deptId, 
       first_name: newSoul.first_name.trim(), 
@@ -78,6 +78,7 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
       phone: newSoul.phone.trim() || null, 
       address: newSoul.address.trim() || null, 
       profession: newSoul.profession.trim() || null, 
+      gender: newSoul.gender || null,
       assigned_to: newSoul.assigned_to || null, 
       photo_url: newSoul.photo_url || null,
       is_baptized_candidate: newSoul.is_baptized_candidate, 
@@ -87,14 +88,23 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
       is_visited: newSoul.is_visited
     };
 
-    if (newSoul.id) { 
-      await supabase.from('department_souls').update(soulData).eq('id', newSoul.id); 
-    } else { 
-      await supabase.from('department_souls').insert({ ...soulData, created_by: user?.id }); 
+    try {
+      if (newSoul.id) {
+        const { error } = await supabase.from('department_souls').update(soulData).eq('id', newSoul.id);
+        if (error) throw error;
+        Alert.alert('Succès', 'Suivi mis à jour.');
+      } else {
+        const { error } = await supabase.from('department_souls').insert({ ...soulData, created_by: user.id });
+        if (error) throw error;
+        Alert.alert('Succès', 'Nouvelle âme enregistrée.');
+      }
+      setIsAddingSoul(false);
+      setNewSoul({ id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '', gender: 'Homme', is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false, integration_status: 'NONE', integration_notes: '' });
+      loadSouls();
+    } catch (err: any) {
+      console.warn('Evangelism save error', err);
+      Alert.alert('Erreur', err?.message || 'Impossible d\u2019enregistrer l\u2019âme.');
     }
-    
-    setIsAddingSoul(false); 
-    loadSouls();
   };
 
   const handleRequestIntegration = async (soul: any) => {
@@ -126,7 +136,7 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
         <TouchableOpacity 
           style={styles.addBtn} 
           onPress={() => { 
-            setNewSoul({ id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '', is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false, integration_status: 'NONE', integration_notes: '' }); 
+            setNewSoul({ id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '', gender: 'Homme', is_baptized_candidate: false, regularity: 'Faible', observations: '', is_called: false, is_visited: false, integration_status: 'NONE', integration_notes: '' }); 
             setIsAddingSoul(true); 
           }}
         >
@@ -151,7 +161,7 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
                 <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
                   <Text style={styles.name}>{item.first_name} {item.last_name}</Text>
                   <TouchableOpacity 
-                    onPress={() => { setNewSoul({ ...item, phone: item.phone || '', address: item.address || '', profession: item.profession || '', assigned_to: item.assigned_to || '', photo_url: item.photo_url || '', regularity: item.regularity || 'Faible', observations: item.observations || '', integration_status: item.integration_status || 'NONE', integration_notes: item.integration_notes || '' }); setIsAddingSoul(true); }} 
+                    onPress={() => { setNewSoul({ ...item, gender: item.gender || 'Homme', phone: item.phone || '', address: item.address || '', profession: item.profession || '', assigned_to: item.assigned_to || '', photo_url: item.photo_url || '', regularity: item.regularity || 'Faible', observations: item.observations || '', integration_status: item.integration_status || 'NONE', integration_notes: item.integration_notes || '' }); setIsAddingSoul(true); }} 
                     style={styles.editBtn}
                   >
                     <Text style={styles.editBtnText}>✏️ Suivi</Text>
@@ -159,6 +169,7 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
                 </View>
                 
                 {item.profession && <Text style={styles.detail}>💼 {item.profession}</Text>}
+                {item.gender && <Text style={styles.detail}>⚧ {item.gender}</Text>}
                 {item.address && <Text style={styles.detail}>📍 {item.address}</Text>}
                 {item.phone && (
                   <TouchableOpacity onPress={() => Linking.openURL(`tel:${item.phone}`)} style={{marginTop: 4}}>
@@ -224,7 +235,7 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
                 )}
                 <View style={styles.photoBtnsRow}>
                   <TouchableOpacity style={styles.photoBtn} onPress={takePhoto}><Text style={styles.photoBtnText}>📷 Caméra</Text></TouchableOpacity>
-                  <TouchableOpacity style={styles.photoBtn} onPress={pickImage}><Text style={styles.photoBtnText}>🖼️ Galerie</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.photoBtn} onPress={pickFromGallery}><Text style={styles.photoBtnText}>🖼️ Galerie</Text></TouchableOpacity>
                 </View>
               </View>
 
@@ -245,6 +256,19 @@ export default function EvangelismModule({ deptId, churchId, activeMembers, isLe
               
               <Text style={styles.inputLabel}>Adresse d'habitation</Text>
               <TextInput style={styles.input} value={newSoul.address} onChangeText={t => setNewSoul({...newSoul, address: t})} />
+
+              <Text style={styles.inputLabel}>Genre de l'âme</Text>
+              <View style={styles.toggleRow}> 
+                {['Homme', 'Femme'].map((genderOption) => (
+                  <TouchableOpacity
+                    key={genderOption}
+                    style={[styles.toggleBtn, newSoul.gender === genderOption && { backgroundColor: '#0f172a' }]}
+                    onPress={() => setNewSoul({...newSoul, gender: genderOption})}
+                  >
+                    <Text style={[styles.toggleText, newSoul.gender === genderOption && { color: '#fff' }]}>{genderOption}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
               <Text style={styles.inputLabel}>Profession / Études</Text>
               <TextInput style={styles.input} value={newSoul.profession} onChangeText={t => setNewSoul({...newSoul, profession: t})} />

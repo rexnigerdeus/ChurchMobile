@@ -1,12 +1,13 @@
 // src/screens/AppointmentScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { 
-  View, Text, TextInput, TouchableOpacity, StyleSheet, 
-  ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, FlatList 
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  ScrollView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, FlatList
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 
-const TYPES = ['Counseling', 'Confession', 'Suivi spirituel', 'Prière', 'Autre'];
+// 🔴 CORRECTIF : "Counseling" → "Conseil" pour la cohérence linguistique française
+const TYPES = ['Conseil', 'Confession', 'Suivi spirituel', 'Prière', 'Autre'];
 
 export default function AppointmentScreen({ onBack }: { onBack: () => void }) {
   // Navigation interne (Onglets)

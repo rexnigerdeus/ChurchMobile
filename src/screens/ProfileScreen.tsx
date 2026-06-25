@@ -1,15 +1,18 @@
 // src/screens/ProfileScreen.tsx
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Platform } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Platform, Image } from 'react-native';
 import { supabase } from '../lib/supabase';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { pickImage, uploadToSupabase } from '../components/WebImagePicker';
+import DateTimePicker from '../components/WebDatePicker';
+
+const MARITAL_STATUSES = ['Célibataire', 'Marié(e)', 'Concubinage', 'Veuf/Veuve', 'Divorcé(e)'];
+const PROFILE_PHOTOS_BUCKET = 'profile-photos';
 
 export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [profile, setProfile] = useState<any>({});
   const [isSystemProfile, setIsSystemProfile] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
 
   useEffect(() => {
     fetchProfile();
@@ -17,13 +20,18 @@ export default function ProfileScreen() {
 
   async function fetchProfile() {
     const { data: { user } } = await supabase.auth.getUser();
-    
-    const { data: crmData } = await supabase.from('church_members').select('*').eq('user_id', user?.id).single();
-    
+
+    const { data: crmData } = await supabase.from('church_members').select('*').eq('user_id', user?.id).maybeSingle();
+
     if (crmData) {
-      setProfile(crmData);
+      // Si la fiche membre n'a pas de photo mais que user_profiles en a une, on l'utilise
+      const { data: userData } = await supabase.from('user_profiles').select('photo_url').eq('id', user?.id).maybeSingle();
+      setProfile({
+        ...crmData,
+        photo_url: crmData.photo_url || userData?.photo_url || null,
+      });
     } else {
-      const { data: authData } = await supabase.from('user_profiles').select('*').eq('id', user?.id).single();
+      const { data: authData } = await supabase.from('user_profiles').select('*').eq('id', user?.id).maybeSingle();
       if (authData) {
         setProfile(authData);
         setIsSystemProfile(true);
@@ -34,11 +42,15 @@ export default function ProfileScreen() {
 
   async function handleUpdate() {
     setUpdating(true);
-    
+
     if (isSystemProfile) {
-      const { error } = await supabase.from('user_profiles').update({ full_name: profile.full_name }).eq('id', profile.id);
+      const { error } = await supabase.from('user_profiles').update({
+        full_name: profile.full_name,
+        photo_url: profile.photo_url,
+      }).eq('id', profile.id);
       setUpdating(false);
       if (!error) Alert.alert("Succès", "Profil système mis à jour !");
+      else Alert.alert("Erreur", error.message);
     } else {
       const { error } = await supabase.from('church_members').update({
         full_name: profile.full_name,
@@ -47,14 +59,102 @@ export default function ProfileScreen() {
         address: profile.address,
         gender: profile.gender,
         birth_date: profile.birth_date,
-        marital_status: profile.marital_status
+        marital_status: profile.marital_status,
+        photo_url: profile.photo_url
       }).eq('id', profile.id);
       setUpdating(false);
       if (!error) Alert.alert("Succès", "Profil mis à jour !");
+      else Alert.alert("Erreur", error.message);
     }
   }
 
+  async function handleUploadPhoto() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const picked = await pickImage({ source: 'gallery', allowsEditing: true, aspect: [1, 1], quality: 0.5 });
+    if (!picked?.uri) return;
+
+    setUpdating(true);
+    try {
+      // S'assurer que le bucket existe : le créer si nécessaire
+      const { data: buckets } = await supabase.storage.listBuckets();
+      const bucketExists = buckets?.some((b: any) => b.id === PROFILE_PHOTOS_BUCKET);
+      if (!bucketExists) {
+        // Tentative de création automatique du bucket (public, 5 Mo)
+        const { error: createErr } = await supabase.storage.createBucket(PROFILE_PHOTOS_BUCKET, {
+          public: true,
+          fileSizeLimit: 5242880,
+          allowedMimeTypes: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'],
+        });
+        if (createErr) {
+          throw new Error(
+            `Le bucket "${PROFILE_PHOTOS_BUCKET}" n'existe pas et ne peut pas être créé automatiquement. ` +
+            `Créez-le manuellement dans Supabase Dashboard → Storage → New bucket (nom: "${PROFILE_PHOTOS_BUCKET}", Public: oui). ` +
+            `Erreur technique: ${createErr.message}`
+          );
+        }
+      }
+
+      const fileName = `${user.id}/${Date.now()}.jpg`;
+      let publicUrl: string;
+      try {
+        publicUrl = await uploadToSupabase(supabase, PROFILE_PHOTOS_BUCKET, fileName, picked);
+      } catch (uploadErr: any) {
+        throw new Error(`Échec de l'upload : ${uploadErr?.message || 'inconnu'}`);
+      }
+
+      // Stocker l'URL dans la bonne table
+      let stored = false;
+      const storeErrors: string[] = [];
+
+      // 1) Cas normal : le fidèle a une fiche church_members → on y stocke la photo
+      if (!isSystemProfile && profile.id) {
+        const { error: updateError } = await supabase.from('church_members')
+          .update({ photo_url: publicUrl }).eq('id', profile.id);
+        if (!updateError) {
+          stored = true;
+        } else {
+          storeErrors.push(`church_members: ${updateError.message}`);
+        }
+      }
+
+      // 2) Toujours tenter aussi user_profiles (permet au pasteur sans fiche membre d'avoir une photo)
+      const { error: userPhotoError } = await supabase.from('user_profiles')
+        .update({ photo_url: publicUrl }).eq('id', user.id);
+      if (!userPhotoError) {
+        stored = true;
+      } else {
+        storeErrors.push(`user_profiles: ${userPhotoError.message}`);
+      }
+
+      if (!stored) {
+        throw new Error(
+          "L'upload a réussi mais l'URL n'a pas pu être sauvegardée.\n\n" +
+          `Détails :\n${storeErrors.join('\n')}\n\n` +
+          "Vérifiez que la migration 20260625_user_profiles_photo_url.sql a été appliquée."
+        );
+      }
+
+      setProfile({ ...profile, photo_url: publicUrl });
+      Alert.alert('Succès', 'Photo de profil mise à jour !');
+    } catch (e: any) {
+      Alert.alert('Erreur', e?.message || "Impossible d'uploader la photo.");
+    }
+    setUpdating(false);
+  }
+
   async function handleLogout() {
+    if (Platform.OS === 'web') {
+      const confirmed = typeof window !== 'undefined' ? window.confirm('Voulez-vous vraiment vous déconnecter ?') : false;
+      if (!confirmed) return;
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        Alert.alert('Erreur', error.message || 'Impossible de se déconnecter.');
+      }
+      return;
+    }
+
     Alert.alert('Déconnexion', 'Voulez-vous vraiment vous déconnecter ?', [
       { text: 'Annuler', style: 'cancel' },
       { text: 'Oui', onPress: async () => await supabase.auth.signOut(), style: 'destructive' }
@@ -65,6 +165,22 @@ export default function ProfileScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+      {/* Photo de profil */}
+      <View style={styles.photoContainer}>
+        {profile.photo_url ? (
+          <Image source={{ uri: profile.photo_url }} style={styles.profilePhoto} />
+        ) : (
+          <View style={styles.profilePhotoPlaceholder}>
+            <Text style={styles.profilePhotoPlaceholderText}>
+              {profile.full_name?.charAt(0)?.toUpperCase() || '?'}
+            </Text>
+          </View>
+        )}
+        <TouchableOpacity style={styles.photoBtn} onPress={handleUploadPhoto} disabled={updating}>
+          {updating ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.photoBtnText}>📷 Changer la photo</Text>}
+        </TouchableOpacity>
+      </View>
+
       <Text style={styles.title}>Mon Profil</Text>
 
       <View style={styles.card}>
@@ -90,24 +206,19 @@ export default function ProfileScreen() {
             </View>
 
             <Text style={styles.label}>Date de naissance</Text>
-            <TouchableOpacity style={styles.input} onPress={() => setShowDatePicker(true)}>
-              <Text style={{color: profile.birth_date ? '#0f172a' : '#94a3b8'}}>{profile.birth_date || 'Sélectionner une date'}</Text>
-            </TouchableOpacity>
-
-            {showDatePicker && (
-              <DateTimePicker
-                value={profile.birth_date ? new Date(profile.birth_date) : new Date()}
-                mode="date"
-                display="default"
-                maximumDate={new Date()}
-                onChange={(event, selectedDate) => {
-                  setShowDatePicker(Platform.OS === 'ios');
-                  if (selectedDate) {
-                    setProfile({...profile, birth_date: selectedDate.toISOString().split('T')[0]});
-                  }
-                }}
-              />
-            )}
+            <DateTimePicker
+              value={profile.birth_date ? new Date(profile.birth_date) : undefined}
+              mode="date"
+              display="default"
+              maximumDate={new Date()}
+              style={styles.input}
+              placeholder="Sélectionner une date"
+              onChange={(event, selectedDate) => {
+                if (selectedDate) {
+                  setProfile({...profile, birth_date: selectedDate.toISOString().split('T')[0]});
+                }
+              }}
+            />
 
             <Text style={styles.label}>Téléphone</Text>
             <TextInput style={styles.input} keyboardType="phone-pad" value={profile.phone} onChangeText={(t) => setProfile({...profile, phone: t})} />
@@ -116,7 +227,7 @@ export default function ProfileScreen() {
 
             <Text style={styles.label}>État Civil</Text>
             <View style={styles.chipsContainer}>
-              {['Célibataire', 'Marié(e)', 'Veuf/Veuve', 'Divorcé(e)'].map((status) => (
+              {MARITAL_STATUSES.map((status) => (
                 <TouchableOpacity key={status} style={[styles.chip, profile.marital_status === status && styles.chipActive]} onPress={() => setProfile({...profile, marital_status: status})}>
                   <Text style={[styles.chipText, profile.marital_status === status && styles.chipTextActive]}>{status}</Text>
                 </TouchableOpacity>
@@ -160,7 +271,15 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: '#f8fafc' },
-  title: { fontSize: 26, fontWeight: 'bold', color: '#0f172a', marginBottom: 20, marginTop: 30 },
+  title: { fontSize: 26, fontWeight: 'bold', color: '#0f172a', marginBottom: 20, marginTop: 10 },
+
+  // Photo de profil
+  photoContainer: { alignItems: 'center', marginBottom: 10, marginTop: 30 },
+  profilePhoto: { width: 100, height: 100, borderRadius: 50, borderWidth: 3, borderColor: '#e2e8f0' },
+  profilePhotoPlaceholder: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#e2e8f0' },
+  profilePhotoPlaceholderText: { fontSize: 40, fontWeight: 'bold', color: '#64748b' },
+  photoBtn: { marginTop: 12, backgroundColor: '#0f172a', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10 },
+  photoBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
   card: { backgroundColor: '#fff', padding: 20, borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
   sectionTitle: { fontSize: 12, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 15 },
   label: { fontSize: 13, fontWeight: '600', color: '#475569', marginBottom: 5, marginTop: 15 },

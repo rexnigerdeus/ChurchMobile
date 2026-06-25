@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "ChurchMobile",
+    "name": "Mon Eglise",
     "slug": "ChurchMobile",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -37,7 +37,19 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single",
+      "name": "Mon Église",
+      "shortName": "Mon Église",
+      "lang": "fr",
+      "scope": "/",
+      "themeColor": "#0f172a",
+      "backgroundColor": "#f8fafc",
+      "display": "standalone",
+      "orientation": "portrait",
+      "startUrl": "/",
+      "manifest": "/manifest.json"
     },
     "plugins": [
       "@react-native-community/datetimepicker",

@@ -5,7 +5,7 @@ import {
   ScrollView, Alert, TextInput, Modal, KeyboardAvoidingView, Platform, Linking 
 } from 'react-native';
 import { supabase } from '../lib/supabase';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker from '../components/WebDatePicker';
 
 type ViewState = 'HUB' | 'MEMBERS' | 'SONGS' | 'FINANCES' | 'ANNOUNCEMENTS' | 'PLANNING';
 
@@ -35,9 +35,7 @@ export default function SubGroupDashboardScreen({ groupId, onBack }: { groupId: 
   const [churchPrograms, setChurchPrograms] = useState<any[]>([]);
   const [isAddingPlanning, setIsAddingPlanning] = useState(false);
   const [selectedChurchProgram, setSelectedChurchProgram] = useState<any>(null);
-  const [dateObj, setDateObj] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [dateObj, setDateObj] = useState<Date | undefined>(undefined);
   const [newPlanning, setNewPlanning] = useState({ title: '', date: '', time: '' });
 
   // États Annonces
@@ -547,42 +545,35 @@ export default function SubGroupDashboardScreen({ groupId, onBack }: { groupId: 
             <View style={{flexDirection: 'row', gap: 10}}>
               <View style={{flex: 1}}>
                 <Text style={styles.inputLabel}>Date *</Text>
-                <TouchableOpacity style={styles.formInput} onPress={() => setShowDatePicker(true)}>
-                  <Text>{newPlanning.date || "Date"}</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={{flex: 1}}>
-                <Text style={styles.inputLabel}>Heure *</Text>
-                <TouchableOpacity style={styles.formInput} onPress={() => setShowTimePicker(true)}>
-                  <Text>{newPlanning.time || "Heure"}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {Platform.OS === 'ios' && (showDatePicker || showTimePicker) && (
-              <View style={{ backgroundColor: '#f1f5f9', borderRadius: 12, marginTop: 15 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', padding: 10 }}>
-                  <TouchableOpacity onPress={() => { setShowDatePicker(false); setShowTimePicker(false); }}><Text style={{ fontWeight: 'bold' }}>OK</Text></TouchableOpacity>
-                </View>
                 <DateTimePicker
-                  value={dateObj} mode={showDatePicker ? "date" : "time"} display="spinner" locale="fr-FR"
+                  value={dateObj}
+                  mode="date"
+                  style={styles.formInput}
+                  placeholder="Sélectionner la date"
                   onChange={(e, date) => {
                     if (date) {
                       setDateObj(date);
-                      if (showDatePicker) setNewPlanning({...newPlanning, date: date.toISOString().split('T')[0]});
-                      else setNewPlanning({...newPlanning, time: `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`});
+                      setNewPlanning({...newPlanning, date: date.toISOString().split('T')[0]});
                     }
                   }}
                 />
               </View>
-            )}
-
-            {Platform.OS === 'android' && showDatePicker && (
-              <DateTimePicker value={dateObj} mode="date" display="default" onChange={(e, date) => { setShowDatePicker(false); if (date) { setDateObj(date); setNewPlanning({...newPlanning, date: date.toISOString().split('T')[0]}); } }} />
-            )}
-            {Platform.OS === 'android' && showTimePicker && (
-              <DateTimePicker value={dateObj} mode="time" display="default" onChange={(e, date) => { setShowTimePicker(false); if (date) { setDateObj(date); setNewPlanning({...newPlanning, time: `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`}); } }} />
-            )}
+              <View style={{flex: 1}}>
+                <Text style={styles.inputLabel}>Heure *</Text>
+                <DateTimePicker
+                  value={dateObj}
+                  mode="time"
+                  style={styles.formInput}
+                  placeholder="Sélectionner l’heure"
+                  onChange={(e, date) => {
+                    if (date) {
+                      setDateObj(date);
+                      setNewPlanning({...newPlanning, time: `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`});
+                    }
+                  }}
+                />
+              </View>
+            </View>
 
             <View style={styles.modalActionsRow}>
               <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingPlanning(false)}><Text style={styles.modalBtnCancelText}>Annuler</Text></TouchableOpacity>

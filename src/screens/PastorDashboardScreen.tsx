@@ -3,11 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, FlatList, 
   ActivityIndicator, Alert, ScrollView, TextInput, Dimensions, 
-  Platform, Modal, BackHandler, Linking
+  Platform, Modal, BackHandler, Linking, Image, KeyboardAvoidingView
 } from 'react-native';
 import { supabase } from '../lib/supabase';
-import * as ImagePicker from 'expo-image-picker';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { pickImage, uploadToSupabase } from '../components/WebImagePicker';
+import DateTimePicker from '../components/WebDatePicker';
 
 import EvangelismModule from '../components/departments/EvangelismModule';
 import HeadcountModule from '../components/departments/HeadcountModule';
@@ -16,12 +16,13 @@ const { width } = Dimensions.get('window');
 const DAYS_OF_WEEK = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 
 // === VUES PRINCIPALES DU PASTEUR ===
-type ViewState = 
-  | 'HUB' | 'BUREAU' | 'AGENDA' | 'PRAYERS' | 'FOLLOWUP' | 'FOLLOWUP_DETAIL' 
-  | 'MEMBERS' | 'FINANCES' 
-  | 'DEPTS_LIST' | 'DEPT_HUB' | 'DEPT_PENDING' | 'DEPT_MEMBERS' | 'DEPT_SOULS' | 'DEPT_HEADCOUNTS' 
-  | 'DEPT_FINANCES' | 'DEPT_PROJECTS' | 'DEPT_EQUIPMENTS' | 'DEPT_PLANNING' | 'DEPT_ANNOUNCEMENTS' 
-  | 'DEPT_SONGS' | 'DEPT_CHILDREN';
+type ViewState =
+  | 'HUB' | 'BUREAU' | 'AGENDA' | 'PRAYERS' | 'FOLLOWUP' | 'FOLLOWUP_DETAIL'
+  | 'MEMBERS' | 'FINANCES'
+  | 'DEPTS_LIST' | 'DEPT_HUB' | 'DEPT_PENDING' | 'DEPT_MEMBERS' | 'DEPT_SOULS' | 'DEPT_HEADCOUNTS'
+  | 'DEPT_FINANCES' | 'DEPT_PROJECTS' | 'DEPT_EQUIPMENTS' | 'DEPT_PLANNING' | 'DEPT_ANNOUNCEMENTS'
+  | 'DEPT_SONGS' | 'DEPT_CHILDREN'
+  | 'DEMOGRAPHY';
 
 type BureauTab = 'ANNOUNCEMENTS' | 'PROGRAMS';
 type AgendaTab = 'AVAILABILITY' | 'PENDING' | 'SCHEDULED' | 'HISTORY';
@@ -76,6 +77,28 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
   const [deptChildren, setDeptChildren] = useState<any[]>([]);
   const [deptSouls, setDeptSouls] = useState<any[]>([]);
   const [deptPlanningRoles, setDeptPlanningRoles] = useState<any[]>([]);
+
+  // 🔴 DÉMOGRAPHIE
+  const [demography, setDemography] = useState<{
+    total: number
+    byGender: { M: number; F: number; unknown: number }
+    byStatus: { APPROVED: number; PENDING: number }
+    ageBuckets: { youth: number; adult: number; senior: number; unknown: number }
+    withPhone: number
+    newThisMonth: number
+    byDept: { deptId: string; deptName: string; count: number }[]
+    avgTenure: number  // en mois
+  }>({
+    total: 0,
+    byGender: { M: 0, F: 0, unknown: 0 },
+    byStatus: { APPROVED: 0, PENDING: 0 },
+    ageBuckets: { youth: 0, adult: 0, senior: 0, unknown: 0 },
+    withPhone: 0,
+    newThisMonth: 0,
+    byDept: [],
+    avgTenure: 0,
+  })
+  const [demographyLoading, setDemographyLoading] = useState(false);
   
   // Détection du type de département
   const [deptType, setDeptType] = useState<{
@@ -137,13 +160,78 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
   }, [currentView]);
 
   // ===================== CHARGEMENT =====================
+  // Récupère le church_id du pasteur avec fallback sur church_members.
+// Sans ce fallback, le rôle CHURCH_LEADER (qui n'a pas toujours entity_id
+// renseigné) voit un dashboard vide.
+//
+// ⚠️ ATTENTION : pour un DEPARTMENT_LEADER, user_roles.entity_id pointe
+// sur le church_department.id (PAS sur le church_id). On doit donc :
+//   1) Prioriser les rôles dont entity_id matche un church_id (CHURCH_LEADER, SECRETARY, FINANCE_MANAGER)
+//   2) Pour un DEPARTMENT_LEADER : retrouver le church_id via church_departments.church_id
+//   3) En dernier recours : via church_members
+async function getChurchIdRaw(): Promise<string | null> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    // 1) Récupération de TOUS les rôles de l'utilisateur
+    const { data: myRoles } = await supabase
+      .from('user_roles')
+      .select('entity_id, role')
+      .eq('user_id', user.id)
+      .in('role', ['CHURCH_LEADER', 'SECRETARY', 'FINANCE_MANAGER', 'DEPARTMENT_LEADER'])
+
+    if (myRoles && myRoles.length > 0) {
+      // 1a) Priorité 1 : un rôle de direction (CHURCH_LEADER / SECRETARY / FINANCE_MANAGER)
+      //     → entity_id = church_id directement
+      const directionRole = myRoles.find(r =>
+        r.role === 'CHURCH_LEADER' || r.role === 'SECRETARY' || r.role === 'FINANCE_MANAGER'
+      )
+      if (directionRole?.entity_id) {
+        // Vérification rapide que c'est bien un church_id existant (sécurité)
+        const { data: church } = await supabase
+          .from('churches')
+          .select('id')
+          .eq('id', directionRole.entity_id)
+          .maybeSingle()
+        if (church?.id) return church.id
+      }
+
+      // 1b) Priorité 2 : un rôle DEPARTMENT_LEADER
+      //     → entity_id = church_department.id → on remonte au church_id
+      const deptRole = myRoles.find(r => r.role === 'DEPARTMENT_LEADER' && r.entity_id)
+      if (deptRole?.entity_id) {
+        const { data: cd } = await supabase
+          .from('church_departments')
+          .select('church_id')
+          .eq('id', deptRole.entity_id)
+          .maybeSingle()
+        if (cd?.church_id) return cd.church_id
+      }
+    }
+
+    // 2) Fallback : via church_members (le pasteur y est forcément APPROVED)
+    const { data: member } = await supabase
+      .from('church_members')
+      .select('church_id')
+      .eq('user_id', user.id)
+      .eq('status', 'APPROVED')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (member?.church_id) return member.church_id
+
+    return null
+  }
+
   async function loadAllData() {
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: role } = await supabase.from('user_roles').select('entity_id').eq('user_id', user?.id).single();
-      const churchId = role?.entity_id;
-      if (!churchId) { setLoading(false); return; }
+      const churchId = await getChurchIdRaw();
+      if (!churchId) {
+        console.warn('[PastorDashboard] Aucun church_id trouvé pour ce pasteur.');
+        setLoading(false);
+        return;
+      }
 
       const { data: churchData } = await supabase.from('churches').select('name').eq('id', churchId).single();
       setChurchInfo(churchData);
@@ -151,22 +239,65 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
       const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 
       const [
-        membersCountRes, deptsCountRes, apptsRes, prayersRes, 
-        financesRes, membersListRes, announcementsRes, programsRes, availabilitiesRes, deptsRes, soulsRes, integRes
+        membersCountRes, deptsCountRes, apptsRes, prayersRes,
+        financesRes, membersListRes, announcementsRes, programsRes, availabilitiesRes, soulsRes, integRes
       ] = await Promise.all([
         supabase.from('church_members').select('*', { count: 'exact', head: true }).eq('church_id', churchId).eq('status', 'APPROVED'),
         supabase.from('church_departments').select('*').eq('church_id', churchId).order('name', { ascending: true }),
         supabase.from('pastoral_appointments').select(`*, member:user_profiles!pastoral_appointments_member_id_fkey(full_name)`).eq('church_id', churchId).order('appointment_date', { ascending: true }),
         supabase.from('pastoral_prayer_requests').select(`*, member:user_profiles!pastoral_prayer_requests_member_id_fkey(full_name)`).eq('church_id', churchId).order('created_at', { ascending: false }),
         supabase.from('financial_entries').select('*, creator:user_profiles!financial_entries_created_by_fkey(full_name)').eq('church_id', churchId).order('created_at', { ascending: false }),
-        supabase.from('church_members').select('id, full_name, phone, status').eq('church_id', churchId).order('full_name', { ascending: true }),
+        supabase.from('church_members').select('id, full_name, phone, status, photo_url').eq('church_id', churchId).order('full_name', { ascending: true }),
         supabase.from('church_announcements').select('*').eq('church_id', churchId).order('created_at', { ascending: false }).limit(20),
         supabase.from('church_programs').select('*').eq('church_id', churchId).order('start_at', { ascending: true }).limit(20),
         supabase.from('pastoral_availabilities').select('*').eq('church_id', churchId).order('day_of_week', { ascending: true }),
-        supabase.from('church_departments').select('id, name, custom_name').eq('church_id', churchId),
         supabase.from('department_souls').select('id, integration_status').eq('integration_status', 'PENDING'),
         supabase.from('department_souls').select('id, department_id, first_name, last_name, integration_status').eq('integration_status', 'PENDING'),
       ]);
+
+      // 🔴 CHARGEMENT DES DÉPARTEMENTS via RPC (bypass RLS)
+      // La fonction get_church_departments(p_church_id) est SECURITY DEFINER,
+      // elle retourne un JSON (tableau d'objets) pour éviter les ambiguïtés
+      // de colonnes PL/pgSQL.
+      let mergedDepts: any[] = []
+      try {
+        const { data: rpcResult, error: rpcError } = await supabase
+          .rpc('get_church_departments', { p_church_id: churchId })
+
+        if (rpcError) {
+          console.warn('[PastorDashboard] RPC get_church_departments error:', JSON.stringify(rpcError))
+        }
+
+        // La fonction retourne du JSON : on normalise en tableau
+        let rows: any[] = []
+        if (rpcResult) {
+          if (Array.isArray(rpcResult)) {
+            rows = rpcResult
+          } else if (typeof rpcResult === 'string') {
+            rows = JSON.parse(rpcResult)
+          } else if (typeof rpcResult === 'object') {
+            // Si c'est déjà un objet JSON parsé par Supabase
+            rows = Array.isArray(rpcResult) ? rpcResult : [rpcResult]
+          }
+        }
+
+        if (rows.length > 0) {
+          mergedDepts = rows.map((row: any) => ({
+            id: row.id,
+            community_dept_id: row.community_dept_id,
+            name: row.custom_name || row.default_name || 'Département',
+            custom_name: row.custom_name || null,
+            default_name: row.default_name || 'Département',
+            icon: '🏢',
+            member_count: row.member_count || 0,
+            has_instance: row.has_instance === true,
+          }))
+        } else {
+          console.warn('[PastorDashboard] RPC a retourné 0 département pour churchId=' + churchId)
+        }
+      } catch (e: any) {
+        console.warn('[PastorDashboard] Erreur RPC départements:', e?.message || e)
+      }
 
       let balance = 0, mIncome = 0;
       if (financesRes.data) {
@@ -182,7 +313,7 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
 
       setStats({
         membersCount: membersCountRes.count || 0,
-        departmentsCount: deptsCountRes.data?.length || 0,
+        departmentsCount: mergedDepts.length,
         pendingAppts: pendingApptsList.length,
         pendingPrayers: pendingPrayersList.length,
         totalBalance: balance,
@@ -194,11 +325,14 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
       setAppointments(apptsRes.data || []);
       setPrayers(prayersRes.data || []);
       setFinances(financesRes.data || []);
+      if (membersListRes.error) {
+        console.warn('[PastorDashboard] members query error:', membersListRes.error.message);
+      }
       setMembers(membersListRes.data || []);
       setAnnouncements(announcementsRes.data || []);
       setPrograms(programsRes.data || []);
       setAvailabilities(availabilitiesRes.data || []);
-      setDepartments(deptsRes.data || []);
+      setDepartments(mergedDepts);
 
     } catch (error) { console.error(error); }
     setLoading(false);
@@ -208,16 +342,39 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
   async function loadDepartmentData(dept: any) {
     setLoading(true);
     try {
-      const deptName = (dept.custom_name || dept.name || '').toLowerCase();
+      const deptName = (dept.custom_name || dept.default_name || dept.name || '').toLowerCase();
       const isChoir = !!deptName.match(/chorale|louange|mystic/);
       const isChild = !!deptName.match(/enfant|ecodim|dimanche/);
       const isEvang = !!deptName.match(/évangélisation|evangelisation|gagnants|âmes|mission/);
       const isMedia = !!deptName.match(/multimédia|multimedia|technique|sonorisation|communication|media/);
       const isUsher = !!deptName.match(/ordre|accueil|protocole|huissier/);
-      setDeptType({ 
+      setDeptType({
         isChoir, isChildren: isChild, isEvangelism: isEvang, isMedia, isUsher,
         hasSubGroups: isChoir || isUsher
       });
+
+      // 🔴 CORRECTIF : si le département n'a pas d'instance church_departments pour cette église,
+      // on ne peut rien charger (pas de membres, pas de finances, etc.). On remet tout à zéro
+      // et on laisse le HUB afficher un message d'information clair.
+      if (!dept.has_instance) {
+        setDeptPending([])
+        setDeptMembers([])
+        setDeptGroups([])
+        setDeptFinances([])
+        setDeptProjects([])
+        setDeptEquipment([])
+        setDeptEquipmentNeeds([])
+        setDeptPlannings([])
+        setDeptAnnouncements([])
+        setDeptHeadcounts([])
+        setDeptSongs([])
+        setDeptChildren([])
+        setDeptSouls([])
+        setDeptTasks([])
+        setDeptSelectedProjectId(null)
+        setLoading(false)
+        return
+      }
 
       // Charger les membres du département
       const reqsRes = await supabase.from('department_members').select('*').eq('department_id', dept.id).in('status', ['PENDING', 'APPROVED']);
@@ -301,19 +458,25 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
   }
 
   // ===================== ACTIONS =====================
+  // Récupère userId + churchId avec fallback sur church_members si user_roles
+  // n'a pas d'entity_id (cas fréquent pour CHURCH_LEADER).
   const getChurchId = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    const { data: role } = await supabase.from('user_roles').select('entity_id').eq('user_id', user?.id).single();
-    return { userId: user?.id, churchId: role?.entity_id };
+    const churchId = await getChurchIdRaw();
+    return { userId: user?.id, churchId };
   };
 
   const updateAppointment = async (id: string, status: string, note: string = '') => {
-    await supabase.from('pastoral_appointments').update({ status, pastor_note: note, updated_at: new Date().toISOString() }).eq('id', id);
+    const { error } = await supabase.from('pastoral_appointments').update({ status, pastor_note: note }).eq('id', id);
+    if (error) {
+      Alert.alert('Erreur', `Impossible de mettre à jour le rendez-vous: ${error.message}`);
+      return;
+    }
     loadAllData();
   };
 
   const updatePrayer = async (id: string, status: 'PRAYED' | 'ANSWERED') => {
-    await supabase.from('pastoral_prayer_requests').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+    await supabase.from('pastoral_prayer_requests').update({ status }).eq('id', id);
     loadAllData();
   };
 
@@ -773,12 +936,36 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
           ListEmptyComponent={<Text style={styles.emptyText}>Aucun membre trouvé.</Text>}
           renderItem={({ item }) => (
             <TouchableOpacity style={styles.memberCard} onPress={() => { setSelectedFollowupMember(item); setCurrentView('FOLLOWUP_DETAIL'); }}>
-              <View style={styles.memberAvatar}><Text style={{ fontWeight: 'bold', color: '#64748b' }}>{item.full_name.charAt(0)}</Text></View>
+              {item.photo_url ? (
+                <Image source={{ uri: item.photo_url }} style={styles.memberPhoto} />
+              ) : (
+                <View style={styles.memberAvatar}><Text style={{ fontWeight: 'bold', color: '#64748b' }}>{item.full_name.charAt(0)}</Text></View>
+              )}
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>{item.full_name}</Text>
                 <Text style={styles.cardSub}>{item.phone || 'Aucun contact'} • {item.status === 'APPROVED' ? '✅ Actif' : '⏳ En attente'}</Text>
               </View>
-              <Text style={{ fontSize: 10, color: '#3b82f6', fontWeight: 'bold' }}>📝 Suivi</Text>
+
+              {/* 🔴 Bouton Appeler (visible uniquement si un numéro existe) */}
+              {item.phone ? (
+                <TouchableOpacity
+                  style={styles.callButton}
+                  onPress={(e) => {
+                    e.stopPropagation?.()
+                    const cleanPhone = (item.phone || '').replace(/[^\d+]/g, '')
+                    if (!cleanPhone) return
+                    Linking.openURL(`tel:${cleanPhone}`).catch(() =>
+                      Alert.alert('Appel impossible', "Aucun composeur téléphonique n'est disponible sur cet appareil.")
+                    )
+                  }}
+                  accessibilityLabel={`Appeler ${item.full_name}`}
+                >
+                  <Text style={styles.callButtonIcon}>📞</Text>
+                  <Text style={styles.callButtonText}>Appeler</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={{ fontSize: 10, color: '#3b82f6', fontWeight: 'bold' }}>📝 Suivi</Text>
+              )}
             </TouchableOpacity>
           )}
         />
@@ -896,24 +1083,300 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
     );
   };
 
+  // ===================== DÉMOGRAPHIE =====================
+  async function loadDemography() {
+    setDemographyLoading(true)
+    try {
+      const churchId = await getChurchIdRaw()
+      if (!churchId) { setDemographyLoading(false); return }
+
+      // On récupère tous les membres + leurs adhésions départements (pour le byDept)
+      const [membersRes, deptMembersRes, deptsRes] = await Promise.all([
+        supabase
+          .from('church_members')
+          .select('id, gender, status, phone, birth_date, created_at')
+          .eq('church_id', churchId),
+        supabase
+          .from('department_members')
+          .select('member_id, department_id, church_department:church_departments(id, custom_name, community_departments(global_departments(default_name)))')
+          .eq('status', 'APPROVED'),
+        supabase
+          .from('church_departments')
+          .select('id, custom_name, community_departments(global_departments(default_name))')
+          .eq('church_id', churchId),
+      ])
+
+      const members = membersRes.data || []
+      const allDepts = deptsRes.data || []
+      const deptMemberships = deptMembersRes.data || []
+
+      // 1) Genre
+      let m = 0, f = 0, unk = 0
+      for (const mem of members) {
+        if (mem.gender === 'M') m++
+        else if (mem.gender === 'F') f++
+        else unk++
+      }
+
+      // 2) Statut
+      let approved = 0, pending = 0
+      for (const mem of members) {
+        if (mem.status === 'APPROVED') approved++
+        else if (mem.status === 'PENDING') pending++
+      }
+
+      // 3) Tranches d'âge (basées sur birth_date si renseignée)
+      let youth = 0, adult = 0, senior = 0, ageUnk = 0
+      const now = new Date()
+      for (const mem of members) {
+        if (!mem.birth_date) { ageUnk++; continue }
+        const birth = new Date(mem.birth_date)
+        const age = Math.floor((now.getTime() - birth.getTime()) / (365.25 * 86400000))
+        if (age < 18) youth++
+        else if (age < 60) adult++
+        else senior++
+      }
+
+      // 4) Avec téléphone
+      let withPhone = 0
+      for (const mem of members) if (mem.phone && String(mem.phone).trim().length > 0) withPhone++
+
+      // 5) Nouveaux ce mois-ci
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+      let newThisMonth = 0
+      let tenureTotalDays = 0
+      for (const mem of members) {
+        if (mem.created_at && mem.created_at >= startOfMonth) newThisMonth++
+        if (mem.created_at) {
+          tenureTotalDays += (now.getTime() - new Date(mem.created_at).getTime()) / 86400000
+        }
+      }
+      const avgTenure = members.length > 0
+        ? Math.round((tenureTotalDays / members.length) / 30)  // converti en mois
+        : 0
+
+      // 6) Répartition par département
+      const countsByDept = new Map<string, number>()
+      // Index des départements de cette église pour filtrer
+      const localDeptIds = new Set(allDepts.map((d: any) => d.id))
+      for (const dm of deptMemberships) {
+        const cd: any = (dm as any).church_department
+        const cdId = Array.isArray(cd) ? cd[0]?.id : cd?.id
+        if (!cdId || !localDeptIds.has(cdId)) continue
+        countsByDept.set(cdId, (countsByDept.get(cdId) || 0) + 1)
+      }
+      const byDept = Array.from(countsByDept.entries()).map(([deptId, count]) => {
+        const d = allDepts.find((x: any) => x.id === deptId)
+        const defaultName = (d as any)?.community_departments?.global_departments?.default_name
+        return {
+          deptId,
+          deptName: (d as any)?.custom_name || defaultName || 'Département',
+          count,
+        }
+      }).sort((a, b) => b.count - a.count)
+
+      setDemography({
+        total: members.length,
+        byGender: { M: m, F: f, unknown: unk },
+        byStatus: { APPROVED: approved, PENDING: pending },
+        ageBuckets: { youth, adult, senior, unknown: ageUnk },
+        withPhone,
+        newThisMonth,
+        byDept,
+        avgTenure,
+      })
+    } catch (e) {
+      console.warn('[Demography] erreur:', e)
+    }
+    setDemographyLoading(false)
+  }
+
+  useEffect(() => {
+    if (currentView === 'DEMOGRAPHY' && demography.total === 0 && !demographyLoading) {
+      loadDemography()
+    }
+  }, [currentView])
+
+  const renderDemography = () => {
+    const d = demography
+    const pct = (n: number) => d.total > 0 ? Math.round((n / d.total) * 100) : 0
+
+    // Couleurs
+    const genderTotal = d.byGender.M + d.byGender.F + d.byGender.unknown
+    const genderPct = (n: number) => genderTotal > 0 ? Math.round((n / genderTotal) * 100) : 0
+
+    return (
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+        <View style={styles.alertInfoBox}>
+          <Text style={styles.alertInfoText}>📊 Démographie de votre église</Text>
+        </View>
+
+        {demographyLoading ? (
+          <ActivityIndicator size="large" color="#0f172a" style={{ marginTop: 40 }} />
+        ) : d.total === 0 ? (
+          <View style={styles.emptyBox}><Text style={styles.emptyText}>Aucun fidèle enregistré pour le moment.</Text></View>
+        ) : (
+          <>
+            {/* KPI principaux */}
+            <View style={styles.statsRow}>
+              <View style={[styles.statBox, { flex: 1 }]}>
+                <Text style={styles.statLabel}>Total fidèles</Text>
+                <Text style={[styles.statValue, { color: '#0f172a' }]}>{d.total}</Text>
+                <Text style={{ fontSize: 10, color: '#10b981', fontWeight: 'bold', marginTop: 4 }}>+{d.newThisMonth} ce mois</Text>
+              </View>
+              <View style={[styles.statBox, { flex: 1 }]}>
+                <Text style={styles.statLabel}>Ancienneté moy.</Text>
+                <Text style={[styles.statValue, { color: '#3b82f6' }]}>{d.avgTenure}</Text>
+                <Text style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>mois en moyenne</Text>
+              </View>
+            </View>
+
+            <View style={styles.statsRow}>
+              <View style={[styles.statBox, { flex: 1 }]}>
+                <Text style={styles.statLabel}>Avec téléphone</Text>
+                <Text style={[styles.statValue, { color: '#10b981' }]}>{d.withPhone}</Text>
+                <Text style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>{pct(d.withPhone)}% du total</Text>
+              </View>
+              <View style={[styles.statBox, { flex: 1 }]}>
+                <Text style={styles.statLabel}>En attente</Text>
+                <Text style={[styles.statValue, { color: d.byStatus.PENDING > 0 ? '#f59e0b' : '#64748b' }]}>{d.byStatus.PENDING}</Text>
+                <Text style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>à valider</Text>
+              </View>
+            </View>
+
+            {/* Répartition par genre */}
+            <View style={styles.analyticsBox}>
+              <Text style={styles.analyticsHeader}>👫 Répartition par genre</Text>
+              <View style={{ marginTop: 15 }}>
+                <DemographyBar label="👨 Hommes" value={d.byGender.M} total={genderTotal} color="#3b82f6" />
+                <View style={{ height: 10 }} />
+                <DemographyBar label="👩 Femmes" value={d.byGender.F} total={genderTotal} color="#ec4899" />
+                {d.byGender.unknown > 0 && (
+                  <>
+                    <View style={{ height: 10 }} />
+                    <DemographyBar label="❓ Non précisé" value={d.byGender.unknown} total={genderTotal} color="#94a3b8" />
+                  </>
+                )}
+              </View>
+            </View>
+
+            {/* Pyramide des âges */}
+            <View style={styles.analyticsBox}>
+              <Text style={styles.analyticsHeader}>🎂 Tranches d'âge</Text>
+              <View style={{ marginTop: 15 }}>
+                <DemographyBar label="🧒 Jeunes (-18 ans)" value={d.ageBuckets.youth} total={d.total} color="#f59e0b" />
+                <View style={{ height: 10 }} />
+                <DemographyBar label="🧑 Adultes (18-59)" value={d.ageBuckets.adult} total={d.total} color="#3b82f6" />
+                <View style={{ height: 10 }} />
+                <DemographyBar label="👴 Seniors (60+)" value={d.ageBuckets.senior} total={d.total} color="#8b5cf6" />
+                {d.ageBuckets.unknown > 0 && (
+                  <>
+                    <View style={{ height: 10 }} />
+                    <DemographyBar label="❓ Date de naissance inconnue" value={d.ageBuckets.unknown} total={d.total} color="#94a3b8" />
+                  </>
+                )}
+              </View>
+            </View>
+
+            {/* Répartition par département */}
+            <View style={styles.analyticsBox}>
+              <Text style={styles.analyticsHeader}>🏢 Fidèles par département</Text>
+              {d.byDept.length === 0 ? (
+                <Text style={[styles.emptyText, { textAlign: 'left', marginTop: 10 }]}>
+                  Aucun fidèle n'est encore inscrit dans un département.
+                </Text>
+              ) : (
+                <View style={{ marginTop: 15 }}>
+                  {d.byDept.slice(0, 8).map((bd, idx) => (
+                    <View key={bd.deptId}>
+                      <View style={styles.deptStatRow}>
+                        <Text style={styles.deptStatLabel}>{idx + 1}. {bd.deptName}</Text>
+                        <Text style={styles.deptStatValue}>{bd.count} ({pct(bd.count)}%)</Text>
+                      </View>
+                      <View style={styles.deptStatBarBg}>
+                        <View
+                          style={[styles.deptStatBarFill, {
+                            width: `${pct(bd.count)}%`,
+                            backgroundColor: idx === 0 ? '#0f172a' : idx === 1 ? '#3b82f6' : idx === 2 ? '#10b981' : '#94a3b8',
+                          }]}
+                        />
+                      </View>
+                      {idx < Math.min(d.byDept.length, 8) - 1 && <View style={{ height: 8 }} />}
+                    </View>
+                  ))}
+                  {d.byDept.length > 8 && (
+                    <Text style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic', textAlign: 'center', marginTop: 10 }}>
+                      + {d.byDept.length - 8} autre{d.byDept.length - 8 > 1 ? 's' : ''} département{d.byDept.length - 8 > 1 ? 's' : ''}
+                    </Text>
+                  )}
+                </View>
+              )}
+            </View>
+
+            {/* Encart insight */}
+            <View style={[styles.analyticsBox, { backgroundColor: '#f0f9ff', borderColor: '#bae6fd' }]}>
+              <Text style={[styles.analyticsHeader, { color: '#0369a1' }]}>💡 Insight pastoral</Text>
+              <Text style={{ fontSize: 13, color: '#0c4a6e', marginTop: 8, lineHeight: 20 }}>
+                {(() => {
+                  const insights: string[] = []
+                  if (d.byGender.M > 0 && d.byGender.F > 0) {
+                    const ratio = Math.round((d.byGender.F / Math.max(d.byGender.M, 1)) * 100)
+                    if (ratio < 60) insights.push(`La proportion de femmes est faible (${ratio} femmes pour 100 hommes). Pensez à des actions ciblées d'accueil féminin.`)
+                    else if (ratio > 140) insights.push(`Forte présence féminine (${ratio} femmes pour 100 hommes). Capitalisez sur les ministères destinés aux femmes.`)
+                  }
+                  if (d.withPhone < d.total * 0.5 && d.total > 0) {
+                    insights.push(`Seulement ${pct(d.withPhone)}% des fidèles ont un téléphone enregistré. Complétez le registre pour faciliter le suivi pastoral.`)
+                  }
+                  if (d.newThisMonth >= 5) insights.push(`Belle dynamique : ${d.newThisMonth} nouveaux fidèles ce mois-ci.`)
+                  if (d.byStatus.PENDING > 0) insights.push(`${d.byStatus.PENDING} demande${d.byStatus.PENDING > 1 ? 's' : ''} d'adhésion en attente de validation.`)
+                  if (insights.length === 0) return "L'église se porte bien : la composition est équilibrée et le registre est à jour. Continuez !"
+                  return insights.join('\n\n')
+                })()}
+              </Text>
+            </View>
+          </>
+        )}
+      </ScrollView>
+    )
+  }
+
+  const DemographyBar = ({ label, value, total, color }: { label: string; value: number; total: number; color: string }) => {
+    const p = total > 0 ? Math.round((value / total) * 100) : 0
+    return (
+      <View>
+        <View style={styles.deptStatRow}>
+          <Text style={styles.deptStatLabel}>{label}</Text>
+          <Text style={styles.deptStatValue}>{value} ({p}%)</Text>
+        </View>
+        <View style={styles.deptStatBarBg}>
+          <View style={[styles.deptStatBarFill, { width: `${p}%`, backgroundColor: color }]} />
+        </View>
+      </View>
+    )
+  }
+
   // ===================== 🔴 LISTE DES DÉPARTEMENTS =====================
   const renderDeptsList = () => {
     // Calculer des stats pour chaque département
     const renderDeptCard = (dept: any) => {
-      // On simule les compteurs en se basant sur les variables si on a chargé le département
       const isSelected = selectedDept?.id === dept.id;
+      const hasInstance = dept.has_instance;
       return (
-        <TouchableOpacity 
-          key={dept.id} 
-          style={[styles.deptCard, isSelected && { borderColor: '#f97316', backgroundColor: '#fff7ed' }]} 
+        <TouchableOpacity
+          key={dept.id}
+          style={[styles.deptCard, isSelected && { borderColor: '#f97316', backgroundColor: '#fff7ed' }]}
           onPress={() => { setSelectedDept(dept); setCurrentView('DEPT_HUB'); loadDepartmentData(dept); }}
         >
           <View style={styles.deptIcon}>
             <Text style={{ fontSize: 24 }}>{dept.icon || '🏢'}</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.deptName}>{dept.custom_name || dept.name}</Text>
-            <Text style={styles.deptSub}>{dept.member_count || 0} membres actifs</Text>
+            <Text style={styles.deptName}>{dept.name}</Text>
+            {hasInstance ? (
+              <Text style={styles.deptSub}>{dept.member_count || 0} membres actifs</Text>
+            ) : (
+              <Text style={[styles.deptSub, { color: '#f97316' }]}>⏳ Pas encore activé — à configurer sur le web</Text>
+            )}
           </View>
           <Text style={{ fontSize: 18, color: '#94a3b8' }}>›</Text>
         </TouchableOpacity>
@@ -967,15 +1430,36 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
   // ===================== 🔴 HUB D'UN DÉPARTEMENT (Supervision) =====================
   const renderDeptHub = () => {
     if (!selectedDept) return null;
-    
+
     const totalIncome = deptFinances.filter(f => f.type === 'INCOME').reduce((s, f) => s + Number(f.amount), 0);
     const totalExpense = deptFinances.filter(f => f.type === 'EXPENSE').reduce((s, f) => s + Number(f.amount), 0);
     const balance = totalIncome - totalExpense;
-    
+
+    // 🔴 CORRECTIF : Si le département n'a pas encore d'instance church_departments,
+    // on affiche un message clair invitant à l'activer depuis le web.
+    if (!selectedDept.has_instance) {
+      return (
+        <ScrollView showsVerticalScrollIndicator={false}>
+          <View style={[styles.alertInfoBox, { backgroundColor: '#fff7ed', borderColor: '#fed7aa', marginTop: 5, marginBottom: 15 }]}>
+            <Text style={[styles.alertInfoText, { color: '#9a3412' }]}>⏳ {selectedDept.name} • Pas encore activé</Text>
+          </View>
+          <View style={[styles.analyticsBox, { borderColor: '#fed7aa', backgroundColor: '#fffbeb' }]}>
+            <Text style={styles.analyticsHeader}>🏢 Département non configuré</Text>
+            <Text style={[styles.emptyText, { marginTop: 5, textAlign: 'left' }]}>
+              Ce département existe dans le catalogue national de votre communauté,
+              mais il n'a pas encore été activé pour votre église. Il sera opérationnel
+              dès qu'un responsable l'aura configuré depuis le tableau de bord web
+              (menu « Départements locaux »).
+            </Text>
+          </View>
+        </ScrollView>
+      )
+    }
+
     return (
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={[styles.alertInfoBox, { backgroundColor: '#f0f9ff', borderColor: '#bae6fd', marginTop: 5, marginBottom: 15 }]}>
-          <Text style={[styles.alertInfoText, { color: '#0369a1' }]}>👁️ {selectedDept.custom_name || selectedDept.name} • Vue Superviseur</Text>
+          <Text style={[styles.alertInfoText, { color: '#0369a1' }]}>👁️ {selectedDept.custom_name || selectedDept.name || selectedDept.default_name} • Vue Superviseur</Text>
         </View>
 
         {/* Stats rapides du département */}
@@ -1483,6 +1967,7 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
         <MenuButton icon="📅" title="Agenda & RDV" subtitle="Créneaux & Demandes" onPress={() => setCurrentView('AGENDA')} />
         <MenuButton icon="🙏" title="Requêtes de Prière" subtitle="Intercessions" onPress={() => setCurrentView('PRAYERS')} />
         <MenuButton icon="📝" title="Suivi Spirituel" subtitle="Carnet pastoral" onPress={() => setCurrentView('FOLLOWUP')} />
+        <MenuButton icon="📊" title="Démographie" subtitle="Hommes, Femmes, Âges" onPress={() => setCurrentView('DEMOGRAPHY')} />
         <MenuButton icon="💰" title="Finances" subtitle="Trésorerie église" onPress={() => setCurrentView('FINANCES')} />
         <MenuButton icon="👥" title="Registre des Fidèles" subtitle="Membres" onPress={() => setCurrentView('MEMBERS')} />
         <MenuButton icon="🏢" title="Supervision Départements" subtitle={`${stats.departmentsCount} départements`} onPress={() => setCurrentView('DEPTS_LIST')} />
@@ -1501,6 +1986,7 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
       case 'FOLLOWUP_DETAIL': return 'Dossier Pastoral';
       case 'MEMBERS': return 'Registre des Fidèles';
       case 'FINANCES': return 'Gestion des Finances';
+      case 'DEMOGRAPHY': return 'Démographie';
       case 'DEPTS_LIST': return 'Départements';
       case 'DEPT_HUB': return selectedDept?.custom_name || selectedDept?.name || 'Département';
       case 'DEPT_PENDING': return 'Candidatures';
@@ -1567,6 +2053,7 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
           {currentView === 'FOLLOWUP' && renderFollowupList()}
           {currentView === 'FOLLOWUP_DETAIL' && renderFollowupDetail()}
           {currentView === 'MEMBERS' && renderMembers()}
+          {currentView === 'DEMOGRAPHY' && renderDemography()}
           {currentView === 'FINANCES' && renderFinances()}
           {currentView === 'DEPTS_LIST' && renderDeptsList()}
           {currentView === 'DEPT_HUB' && renderDeptHub()}
@@ -1585,19 +2072,19 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
       )}
 
       {/* ===== MODALE DE SORTIE (DÉCONNEXION) ===== */}
-      <Modal visible={exitModalVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { maxWidth: 340 }]}>
-            <Text style={{ fontSize: 50, textAlign: 'center', marginBottom: 10 }}>👋</Text>
-            <Text style={styles.modalTitle}>Quitter le tableau pastoral ?</Text>
-            <Text style={styles.modalSubtitle}>
+      <Modal visible={exitModalVisible} transparent animationType="fade" onRequestClose={() => setExitModalVisible(false)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Text style={styles.confirmIcon}>👋</Text>
+            <Text style={styles.confirmTitle}>Quitter le tableau pastoral ?</Text>
+            <Text style={styles.confirmSubtitle}>
               Vous serez déconnecté de votre espace de gestion d'église.
             </Text>
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.btnSecondary} onPress={() => setExitModalVisible(false)}>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={[styles.btnSecondary, { marginTop: 0 }]} onPress={() => setExitModalVisible(false)}>
                 <Text style={styles.btnSecondaryText}>Annuler</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.btnPrimary, { backgroundColor: '#ef4444' }]} onPress={handleExit}>
+              <TouchableOpacity style={[styles.btnPrimary, { flex: 1, marginTop: 0, backgroundColor: '#ef4444' }]} onPress={handleExit}>
                 <Text style={styles.btnPrimaryText}>Se déconnecter</Text>
               </TouchableOpacity>
             </View>
@@ -1606,12 +2093,22 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
       </Modal>
 
       {/* ===== MODALE NOTE PASTORALE ===== */}
-      <Modal visible={noteEditorVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+      <Modal visible={noteEditorVisible} animationType="slide" transparent onRequestClose={() => setNoteEditorVisible(false)}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>📝 Note Pastorale</Text>
             <Text style={styles.modalSubtitle}>Consignez les points de prière, conseils ou observations issus de cet entretien.</Text>
-            <TextInput style={[styles.input, { minHeight: 120, textAlignVertical: 'top' }]} placeholder="Vos notes..." multiline value={editingNote} onChangeText={setEditingNote} />
+            <TextInput
+              style={[styles.input, { minHeight: 120, textAlignVertical: 'top' }]}
+              placeholder="Vos notes..."
+              multiline
+              value={editingNote}
+              onChangeText={setEditingNote}
+              autoFocus
+            />
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.btnSecondary} onPress={() => setNoteEditorVisible(false)}>
                 <Text style={styles.btnSecondaryText}>Annuler</Text>
@@ -1624,16 +2121,26 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ===== MODALE REFUS RDV ===== */}
-      <Modal visible={rejectModalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+      <Modal visible={rejectModalVisible} animationType="slide" transparent onRequestClose={() => setRejectModalVisible(false)}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>✕ Refuser la demande</Text>
             <Text style={styles.modalSubtitle}>Indiquez le motif du refus qui sera visible par le fidèle.</Text>
-            <TextInput style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]} placeholder="Motif du refus..." multiline value={rejectReason} onChangeText={setRejectReason} />
+            <TextInput
+              style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]}
+              placeholder="Motif du refus..."
+              multiline
+              value={rejectReason}
+              onChangeText={setRejectReason}
+              autoFocus
+            />
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.btnSecondary} onPress={() => setRejectModalVisible(false)}>
                 <Text style={styles.btnSecondaryText}>Annuler</Text>
@@ -1646,7 +2153,7 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1753,14 +2260,14 @@ const AvailabilityForm = ({ onSubmit }: { onSubmit: (d: number, s: string, e: st
 };
 
 const SpiritualNoteForm = ({ onSubmit }: { onSubmit: (c: string, b: string) => void }) => {
-  const [category, setCategory] = useState('Counseling');
+  const [category, setCategory] = useState('Conseil');
   const [body, setBody] = useState('');
   return (
     <View>
       <Text style={styles.label}>Catégorie</Text>
       <View style={styles.pickerWrap}>
         <TouchableOpacity style={styles.picker} onPress={() => Alert.alert('Catégorie', 'Choisir', [
-          { text: 'Counseling', onPress: () => setCategory('Counseling') },
+          { text: 'Conseil', onPress: () => setCategory('Conseil') },
           { text: 'Baptême', onPress: () => setCategory('Baptême') },
           { text: 'Discipline', onPress: () => setCategory('Discipline') },
           { text: 'Combat Spirituel', onPress: () => setCategory('Combat Spirituel') },
@@ -1847,6 +2354,12 @@ const styles = StyleSheet.create({
   searchInput: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', padding: 14, borderRadius: 12, marginBottom: 12, fontSize: 14 },
   memberCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#e2e8f0' },
   memberAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  memberPhoto: { width: 42, height: 42, borderRadius: 21, marginRight: 12, backgroundColor: '#f1f5f9' },
+
+  // 🔴 Bouton "Appeler" dans le registre des fidèles
+  callButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 7, backgroundColor: '#10b981', borderRadius: 8, marginLeft: 8 },
+  callButtonIcon: { fontSize: 14 },
+  callButtonText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
 
   announcementCard: { backgroundColor: '#fff', padding: 15, borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: '#e2e8f0', borderLeftWidth: 4, borderLeftColor: '#3b82f6' },
   programCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 16, marginBottom: 10, borderWidth: 1, borderColor: '#e2e8f0', gap: 12 },
@@ -1893,6 +2406,14 @@ const styles = StyleSheet.create({
   modalSubtitle: { fontSize: 13, color: '#64748b', marginBottom: 15 },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 15 },
 
+  confirmOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  confirmBox: { width: '100%', maxWidth: 340, backgroundColor: '#fff', borderRadius: 20, padding: 24, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 20, elevation: 8 },
+  confirmIcon: { fontSize: 44, textAlign: 'center', marginBottom: 12 },
+  confirmTitle: { fontSize: 17, fontWeight: 'bold', color: '#0f172a', textAlign: 'center', marginBottom: 8 },
+  confirmSubtitle: { fontSize: 13, color: '#64748b', textAlign: 'center', marginBottom: 20, lineHeight: 18 },
+  confirmActions: { flexDirection: 'row', gap: 10, width: '100%' },
+  confirmActionsBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+
   balanceCard: { backgroundColor: '#0f172a', padding: 25, borderRadius: 20, alignItems: 'center', marginBottom: 15, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 },
   balanceLabel: { color: '#cbd5e1', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 },
   balanceAmount: { color: '#fff', fontSize: 36, fontWeight: 'bold', marginBottom: 15 },
@@ -1908,6 +2429,13 @@ const styles = StyleSheet.create({
   analyticsStat: { alignItems: 'flex-start', flex: 1 },
   analyticsLabel: { fontSize: 11, color: '#94a3b8', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 4 },
   analyticsValue: { fontSize: 18, fontWeight: 'bold' },
+
+  // 🔴 Démographie — barres de progression
+  deptStatRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  deptStatLabel: { fontSize: 13, color: '#0f172a', fontWeight: '600', flex: 1 },
+  deptStatValue: { fontSize: 13, color: '#64748b', fontWeight: 'bold' },
+  deptStatBarBg: { height: 8, backgroundColor: '#f1f5f9', borderRadius: 4, overflow: 'hidden' },
+  deptStatBarFill: { height: '100%', borderRadius: 4 },
   analyticsDivider: { width: 1, height: 30, backgroundColor: '#e2e8f0', marginHorizontal: 15 },
 
   chartContainer: { flexDirection: 'row', alignItems: 'flex-end', height: 130, justifyContent: 'space-between', gap: 8, paddingHorizontal: 5 },

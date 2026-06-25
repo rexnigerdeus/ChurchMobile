@@ -6,8 +6,8 @@ import {
   KeyboardAvoidingView, Platform, Image, Dimensions, Switch
 } from 'react-native';
 import { supabase } from '../lib/supabase';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import * as ImagePicker from 'expo-image-picker';
+import { pickImage, uploadToSupabase } from '../components/WebImagePicker';
+import DateTimePicker from '../components/WebDatePicker';
 
 import EvangelismModule from '../components/departments/EvangelismModule';
 import FinanceModule from '../components/departments/FinanceModule';
@@ -50,6 +50,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [isAddingFinance, setIsAddingFinance] = useState(false);
   const [newFinance, setNewFinance] = useState({ type: 'INCOME', category: 'Mensuelle', amount: '', motif: '', member_id: '' });
   const [isMemberDropdownOpen, setIsMemberDropdownOpen] = useState(false);
+  const [isAssignDropdownOpen, setIsAssignDropdownOpen] = useState(false);
 
   const [plannings, setPlannings] = useState<any[]>([]);
   const [churchPrograms, setChurchPrograms] = useState<any[]>([]);
@@ -58,9 +59,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [isAddingPlanning, setIsAddingPlanning] = useState(false);
   const [selectedChurchProgram, setSelectedChurchProgram] = useState<any>(null);
   
-  const [dateObj, setDateObj] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [dateObj, setDateObj] = useState<Date | undefined>(undefined);
   const [newPlanning, setNewPlanning] = useState({ title: '', date: '', time: '', description: '', is_church_event: false, concerns_all: true, selected_groups: [] as string[] });
 
   const [isAssigningRole, setIsAssigningRole] = useState(false);
@@ -93,7 +92,6 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [newProject, setNewProject] = useState({ name: '', description: '' });
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [newTask, setNewTask] = useState({ title: '', assigned_to: '', deadline: '' });
-  const [showTaskDatePicker, setShowTaskDatePicker] = useState(false);
 
   const [equipments, setEquipments] = useState<any[]>([]);
   const [equipmentNeeds, setEquipmentNeeds] = useState<any[]>([]);
@@ -325,16 +323,12 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
 
   // --- AUTRES ACTIONS PRESERVEES ---
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Désolé', 'Permission caméra requise !');
-    let result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true });
-    if (!result.canceled && result.assets[0].base64) setNewSoul({ ...newSoul, photo_url: `data:image/jpeg;base64,${result.assets[0].base64}` });
+    const picked = await pickImage({ source: 'camera', allowsEditing: true, aspect: [1, 1], quality: 0.5 });
+    if (picked?.uri) setNewSoul({ ...newSoul, photo_url: picked.uri });
   };
-  const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Désolé', 'Permission galerie requise !');
-    let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true });
-    if (!result.canceled && result.assets[0].base64) setNewSoul({ ...newSoul, photo_url: `data:image/jpeg;base64,${result.assets[0].base64}` });
+  const pickFromGallery = async () => {
+    const picked = await pickImage({ source: 'gallery', allowsEditing: true, aspect: [1, 1], quality: 0.5 });
+    if (picked?.uri) setNewSoul({ ...newSoul, photo_url: picked.uri });
   };
   const handleAddSoul = async () => {
     if (!newSoul.first_name.trim() || !newSoul.last_name.trim()) return Alert.alert("Erreur", "Le nom et prénom sont obligatoires.");
@@ -601,26 +595,31 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                 </View>
               )}
 
-              <FlatList 
-                data={filteredActiveMembers} 
-                keyExtractor={item => item.id} 
-                showsVerticalScrollIndicator={false} 
-                ListEmptyComponent={<Text style={styles.emptyText}>Aucun membre trouvé dans ce groupe.</Text>} 
-                renderItem={({ item }) => { 
-                const ledGroup = groups.find(g => g.leader_id === item.user_id); 
+              <FlatList
+                data={filteredActiveMembers}
+                keyExtractor={item => item.id}
+                showsVerticalScrollIndicator={false}
+                ListEmptyComponent={<Text style={styles.emptyText}>Aucun membre trouvé dans ce groupe.</Text>}
+                renderItem={({ item }) => {
+                const ledGroup = groups.find(g => g.leader_id === item.user_id);
                 const assignedGroup = groups.find(g => g.id === item.sub_group_id);
                 return (
-                  <TouchableOpacity style={styles.memberItem} onPress={() => {
-                    if (!hasSubGroups) handleRemoveMemberFromDept(item.id);
-                    else setSelectedMember(item);
-                  }}>
-                    <View>
+                  <View style={[styles.memberItem, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+                    <TouchableOpacity
+                      style={{ flex: 1, paddingRight: 10 }}
+                      onPress={() => setSelectedMember(item)}
+                    >
                       <Text style={styles.memberName}>{item.member.full_name}</Text>
                       {hasSubGroups && <Text style={styles.memberRole}>{ledGroup ? `👑 Responsable : ${ledGroup.name}` : assignedGroup ? `👥 Appartient à : ${assignedGroup.name}` : 'Membre simple'}</Text>}
-                    </View>
-                    <Text style={[styles.assignBtn, !hasSubGroups && {backgroundColor: '#fef2f2', color: '#ef4444'}]}>{hasSubGroups ? 'Gérer ➔' : 'Exclure ➔'}</Text>
-                  </TouchableOpacity>
-                ); 
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.memberExcludeBtn}
+                      onPress={() => handleRemoveMemberFromDept(item.id)}
+                    >
+                      <Text style={styles.memberExcludeBtnText}>✕ Exclure</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
               }}/>
             </View>
           )}
@@ -833,19 +832,20 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
               <View style={{flexDirection: 'row', gap: 10, marginBottom: 15}}>
                 <View style={{flex: 1}}>
                   <Text style={styles.inputLabel}>Date de l'événement *</Text>
-                  <TouchableOpacity style={styles.formInput} onPress={() => setShowDatePicker(true)}>
-                    <Text style={{color: newHeadcount.event_date ? '#0f172a' : '#94a3b8'}}>{newHeadcount.event_date || "Sélectionner la date"}</Text>
-                  </TouchableOpacity>
+                  <DateTimePicker
+                    value={dateObj}
+                    mode="date"
+                    style={styles.formInput}
+                    placeholder="Sélectionner la date"
+                    onChange={(e, d) => {
+                      if (d) {
+                        setDateObj(d);
+                        setNewHeadcount({...newHeadcount, event_date: d.toISOString().split('T')[0]});
+                      }
+                    }}
+                  />
                 </View>
               </View>
-
-              {Platform.OS === 'ios' && showDatePicker && (
-                <View style={styles.iosPickerContainer}>
-                  <View style={styles.iosPickerHeader}><TouchableOpacity onPress={() => setShowDatePicker(false)}><Text style={styles.iosPickerDoneText}>OK</Text></TouchableOpacity></View>
-                  <DateTimePicker value={dateObj} mode="date" display="spinner" locale="fr-FR" onChange={(e, d) => { if (d) { setDateObj(d); setNewHeadcount({...newHeadcount, event_date: d.toISOString().split('T')[0]}); } }} />
-                </View>
-              )}
-              {Platform.OS === 'android' && showDatePicker && (<DateTimePicker value={dateObj} mode="date" onChange={(e, d) => { setShowDatePicker(false); if (d) { setDateObj(d); setNewHeadcount({...newHeadcount, event_date: d.toISOString().split('T')[0]}); } }} />)}
 
               <View style={{ zIndex: 10 }}>
                 <Text style={styles.inputLabel}>Programme de l'église *</Text>
@@ -889,6 +889,436 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       <Modal visible={isAddingSoul} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '90%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>{newSoul.id ? 'Suivi et Profil' : 'Enregistrer une âme'}</Text><TouchableOpacity onPress={() => setIsAddingSoul(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView showsVerticalScrollIndicator={false}><View style={{ alignItems: 'center', marginBottom: 20 }}>{newSoul.photo_url ? (<Image source={{ uri: newSoul.photo_url }} style={styles.soulAvatar} />) : (<View style={styles.soulAvatarPlaceholder}><Text style={{fontSize: 30}}>👤</Text></View>)}</View><Text style={styles.sectionTitle}>Identité</Text><View style={{flexDirection: 'row', gap: 10}}><View style={{flex: 1}}><Text style={styles.inputLabel}>Prénom *</Text><TextInput style={styles.formInput} value={newSoul.first_name} onChangeText={t => setNewSoul({...newSoul, first_name: t})} /></View><View style={{flex: 1}}><Text style={styles.inputLabel}>Nom *</Text><TextInput style={styles.formInput} value={newSoul.last_name} onChangeText={t => setNewSoul({...newSoul, last_name: t})} /></View></View><Text style={styles.inputLabel}>Téléphone</Text><TextInput style={styles.formInput} keyboardType="phone-pad" value={newSoul.phone} onChangeText={t => setNewSoul({...newSoul, phone: t})} />{newSoul.id ? (<><Text style={[styles.sectionTitle, {marginTop: 20}]}>Journal de Suivi</Text><View style={{marginTop: 30, marginBottom: 40, gap: 15}}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#f97316'}]} onPress={handleAddSoul}><Text style={styles.modalBtnSubmitText}>Sauvegarder le Suivi</Text></TouchableOpacity>{(newSoul.integration_status === 'NONE' || newSoul.integration_status === 'REJECTED' || !newSoul.integration_status) && (<TouchableOpacity style={{backgroundColor: '#0f172a', padding: 15, borderRadius: 12, alignItems: 'center'}} onPress={() => handleRequestIntegration(newSoul)}><Text style={{color: '#fff', fontWeight: 'bold', fontSize: 14}}>Dossier mâture : Demander l'intégration ➔</Text></TouchableOpacity>)}</View></>) : (<View style={[styles.modalActionsRow, {marginBottom: 40, marginTop: 20}]}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#f97316'}]} onPress={handleAddSoul}><Text style={styles.modalBtnSubmitText}>Enregistrer la nouvelle âme</Text></TouchableOpacity></View>)}</ScrollView></View></KeyboardAvoidingView></Modal>
       <Modal visible={isAddingFinance} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Transaction</Text><TouchableOpacity onPress={() => setIsAddingFinance(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView><View style={styles.financeToggleRow}><TouchableOpacity style={[styles.financeToggleBtn, newFinance.type === 'INCOME' && styles.financeToggleActiveIn]} onPress={() => setNewFinance({...newFinance, type: 'INCOME'})}><Text style={[styles.financeToggleText, newFinance.type === 'INCOME' && { color: '#fff' }]}>📥 Entrée</Text></TouchableOpacity><TouchableOpacity style={[styles.financeToggleBtn, newFinance.type === 'EXPENSE' && styles.financeToggleActiveOut]} onPress={() => setNewFinance({...newFinance, type: 'EXPENSE'})}><Text style={[styles.financeToggleText, newFinance.type === 'EXPENSE' && { color: '#fff' }]}>💸 Sortie</Text></TouchableOpacity></View>{newFinance.type === 'INCOME' && (<View style={styles.financeCategoryRow}>{['Mensuelle', 'Régionale', 'Événement local'].map(cat => (<TouchableOpacity key={cat} style={[styles.catPill, newFinance.category === cat && styles.catPillActive]} onPress={() => setNewFinance({...newFinance, category: cat})}><Text style={[styles.catPillText, newFinance.category === cat && { color: '#fff' }]}>{cat}</Text></TouchableOpacity>))}</View>)}<Text style={styles.inputLabel}>Montant *</Text><TextInput style={styles.formInput} keyboardType="numeric" onChangeText={t => setNewFinance({...newFinance, amount: t})} /><Text style={styles.inputLabel}>Motif</Text><TextInput style={styles.formInput} onChangeText={t => setNewFinance({...newFinance, motif: t})} /><View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddFinance}><Text style={styles.modalBtnSubmitText}>Valider</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
       <Modal visible={isAddingProject} transparent animationType="slide"><KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={[styles.modalContentBottom, {maxHeight: '85%'}]}><View style={styles.modalHeaderRow}><Text style={styles.modalTitle}>Nouveau Projet</Text><TouchableOpacity onPress={() => setIsAddingProject(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity></View><ScrollView><Text style={styles.inputLabel}>Nom du projet *</Text><TextInput style={styles.formInput} placeholder="Ex: Culte de Pâques" onChangeText={t => setNewProject({...newProject, name: t})} /><Text style={styles.inputLabel}>Description</Text><TextInput style={styles.formInput} placeholder="Objectif..." onChangeText={t => setNewProject({...newProject, description: t})} /><View style={[styles.modalActionsRow, {marginBottom: 30}]}><TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#8b5cf6'}]} onPress={handleAddProject}><Text style={styles.modalBtnSubmitText}>Créer</Text></TouchableOpacity></View></ScrollView></View></KeyboardAvoidingView></Modal>
+
+      {/* === MODALE : INSCRIRE UN ENFANT === */}
+      <Modal visible={isAddingChild} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '85%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Inscrire un enfant</Text>
+              <TouchableOpacity onPress={() => { setIsAddingChild(false); setIsClassDropdownOpen(false); }}>
+                <Text style={{fontSize: 24, color: '#64748b'}}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={{flexDirection: 'row', gap: 10}}>
+                <View style={{flex: 1}}>
+                  <Text style={styles.inputLabel}>Prénom *</Text>
+                  <TextInput style={styles.formInput} placeholder="Ex: Jean" value={newChild.first_name} onChangeText={t => setNewChild({...newChild, first_name: t})} />
+                </View>
+                <View style={{flex: 1}}>
+                  <Text style={styles.inputLabel}>Nom *</Text>
+                  <TextInput style={styles.formInput} placeholder="Ex: Dupont" value={newChild.last_name} onChangeText={t => setNewChild({...newChild, last_name: t})} />
+                </View>
+              </View>
+
+              <Text style={styles.inputLabel}>Classe *</Text>
+              <TouchableOpacity
+                style={styles.dropdownSelector}
+                onPress={() => setIsClassDropdownOpen(!isClassDropdownOpen)}
+              >
+                <Text style={newChild.class_id ? styles.dropdownTextSelected : styles.dropdownTextPlaceholder}>
+                  {newChild.class_id
+                    ? groups.find(g => g.id === newChild.class_id)?.name || 'Classe sélectionnée'
+                    : (groups.length === 0 ? '⚠️ Créez d\'abord une classe ci-dessus' : '-- Choisir une classe --')}
+                </Text>
+                <Text style={{color: '#94a3b8'}}>▼</Text>
+              </TouchableOpacity>
+              {isClassDropdownOpen && (
+                <View style={styles.dropdownContainer}>
+                  {groups.length === 0 ? (
+                    <Text style={{padding: 12, color: '#ef4444', fontSize: 12}}>
+                      Aucune classe. Créez-en une d'abord dans le formulaire "Créer une classe" ci-dessus.
+                    </Text>
+                  ) : (
+                    groups.map(g => (
+                      <TouchableOpacity
+                        key={g.id}
+                        style={styles.dropdownItem}
+                        onPress={() => { setNewChild({...newChild, class_id: g.id}); setIsClassDropdownOpen(false); }}
+                      >
+                        <Text style={styles.dropdownItemText}>{g.name}</Text>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              )}
+
+              <Text style={styles.inputLabel}>Parent / Tuteur</Text>
+              <TextInput style={styles.formInput} placeholder="Nom du parent" value={newChild.parent_name} onChangeText={t => setNewChild({...newChild, parent_name: t})} />
+
+              <Text style={styles.inputLabel}>Téléphone parent</Text>
+              <TextInput style={styles.formInput} placeholder="+221 77 ..." keyboardType="phone-pad" value={newChild.parent_phone} onChangeText={t => setNewChild({...newChild, parent_phone: t})} />
+
+              <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => { setIsAddingChild(false); setIsClassDropdownOpen(false); }}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#f43f5e'}]} onPress={handleAddChild}>
+                  <Text style={styles.modalBtnSubmitText}>Inscrire</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* === MODALE : AJOUTER UN CHANT === */}
+      <Modal visible={isAddingSong} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '70%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Nouveau Chant</Text>
+              <TouchableOpacity onPress={() => setIsAddingSong(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity>
+            </View>
+            <ScrollView>
+              <Text style={styles.inputLabel}>Titre *</Text>
+              <TextInput style={styles.formInput} placeholder="Ex: Mon rocher" value={newSong.title} onChangeText={t => setNewSong({...newSong, title: t})} />
+              <Text style={styles.inputLabel}>Tonalité</Text>
+              <TextInput style={styles.formInput} placeholder="Ex: La Majeur" value={newSong.key} onChangeText={t => setNewSong({...newSong, key: t})} />
+              <Text style={styles.inputLabel}>Lien YouTube (optionnel)</Text>
+              <TextInput style={styles.formInput} placeholder="https://..." autoCapitalize="none" value={newSong.url} onChangeText={t => setNewSong({...newSong, url: t})} />
+              <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingSong(false)}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.modalBtnSubmit, {backgroundColor: '#8b5cf6'}]} onPress={handleAddSong}>
+                  <Text style={styles.modalBtnSubmitText}>Ajouter</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* === MODALE : AJOUTER UNE ANNONCE === */}
+      <Modal visible={isAddingAnnouncement} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '85%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Nouvelle Annonce</Text>
+              <TouchableOpacity onPress={() => setIsAddingAnnouncement(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity>
+            </View>
+            <ScrollView>
+              <Text style={styles.inputLabel}>Titre *</Text>
+              <TextInput style={styles.formInput} placeholder="Ex: Répétition samedi" value={newAnnouncement.title} onChangeText={t => setNewAnnouncement({...newAnnouncement, title: t})} />
+              <Text style={styles.inputLabel}>Contenu *</Text>
+              <TextInput style={[styles.formInput, {height: 120, paddingTop: 12}]} placeholder="Détails de l'annonce..." multiline value={newAnnouncement.content} onChangeText={t => setNewAnnouncement({...newAnnouncement, content: t})} />
+
+              {hasSubGroups && (
+                <>
+                  <View style={{flexDirection: 'row', alignItems: 'center', marginTop: 15, marginBottom: 10}}>
+                    <Switch
+                      value={newAnnouncement.concerns_all}
+                      onValueChange={v => setNewAnnouncement({...newAnnouncement, concerns_all: v})}
+                    />
+                    <Text style={{marginLeft: 10, color: '#475569', fontSize: 13, fontWeight: '500'}}>Concerne tous les groupes</Text>
+                  </View>
+                  {!newAnnouncement.concerns_all && groups.length > 0 && (
+                    <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10}}>
+                      {groups.map(g => {
+                        const sel = newAnnouncement.selected_groups.includes(g.id);
+                        return (
+                          <TouchableOpacity
+                            key={g.id}
+                            onPress={() => {
+                              const next = sel
+                                ? newAnnouncement.selected_groups.filter(x => x !== g.id)
+                                : [...newAnnouncement.selected_groups, g.id];
+                              setNewAnnouncement({...newAnnouncement, selected_groups: next});
+                            }}
+                            style={{
+                              paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+                              backgroundColor: sel ? '#0f172a' : '#fff',
+                              borderWidth: 1, borderColor: sel ? '#0f172a' : '#e2e8f0',
+                            }}
+                          >
+                            <Text style={{color: sel ? '#fff' : '#475569', fontSize: 12, fontWeight: '500'}}>{g.name}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </>
+              )}
+
+              <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingAnnouncement(false)}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddAnnouncement}>
+                  <Text style={styles.modalBtnSubmitText}>Publier</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* === MODALE : AJOUTER UN PLANNING === */}
+      <Modal visible={isAddingPlanning} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '85%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Nouveau Planning</Text>
+              <TouchableOpacity onPress={() => { setIsAddingPlanning(false); }}>
+                <Text style={{fontSize: 24, color: '#64748b'}}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              <Text style={styles.inputLabel}>Titre *</Text>
+              <TextInput style={styles.formInput} placeholder="Ex: Répétition générale" value={newPlanning.title} onChangeText={t => setNewPlanning({...newPlanning, title: t})} />
+
+              <View style={{flexDirection: 'row', gap: 10}}>
+                <View style={{flex: 1}}>
+                  <Text style={styles.inputLabel}>Date *</Text>
+                <DateTimePicker
+                  value={dateObj}
+                  mode="date"
+                  style={styles.formInput}
+                  placeholder="Sélectionner la date"
+                  onChange={(e, d) => {
+                    if (d) {
+                      setDateObj(d);
+                      setNewPlanning({...newPlanning, date: d.toISOString().split('T')[0]});
+                    }
+                  }}
+                />
+              </View>
+              <View style={{flex: 1}}>
+                <Text style={styles.inputLabel}>Heure *</Text>
+                <DateTimePicker
+                  value={dateObj}
+                  mode="time"
+                  style={styles.formInput}
+                  placeholder="Sélectionner l’heure"
+                  onChange={(e, d) => {
+                    if (d) {
+                      setDateObj(d);
+                      const hh = String(d.getHours()).padStart(2, '0');
+                      const mm = String(d.getMinutes()).padStart(2, '0');
+                      setNewPlanning({...newPlanning, time: `${hh}:${mm}`});
+                    }
+                  }}
+                />
+              </View>
+            </View>
+
+              {hasSubGroups && (
+                <>
+                  <View style={{flexDirection: 'row', alignItems: 'center', marginTop: 15, marginBottom: 10}}>
+                    <Switch
+                      value={newPlanning.concerns_all}
+                      onValueChange={v => setNewPlanning({...newPlanning, concerns_all: v})}
+                    />
+                    <Text style={{marginLeft: 10, color: '#475569', fontSize: 13, fontWeight: '500'}}>Concerne tous les groupes</Text>
+                  </View>
+                  {!newPlanning.concerns_all && groups.length > 0 && (
+                    <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10}}>
+                      {groups.map(g => {
+                        const sel = newPlanning.selected_groups.includes(g.id);
+                        return (
+                          <TouchableOpacity
+                            key={g.id}
+                            onPress={() => {
+                              const next = sel
+                                ? newPlanning.selected_groups.filter(x => x !== g.id)
+                                : [...newPlanning.selected_groups, g.id];
+                              setNewPlanning({...newPlanning, selected_groups: next});
+                            }}
+                            style={{
+                              paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+                              backgroundColor: sel ? '#0f172a' : '#fff',
+                              borderWidth: 1, borderColor: sel ? '#0f172a' : '#e2e8f0',
+                            }}
+                          >
+                            <Text style={{color: sel ? '#fff' : '#475569', fontSize: 12, fontWeight: '500'}}>{g.name}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </>
+              )}
+
+              <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingPlanning(false)}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={() => handleAddPlanning(false)}>
+                  <Text style={styles.modalBtnSubmitText}>Créer</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* === MODALE : AJOUTER UNE TÂCHE === */}
+      <Modal visible={isAddingTask} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '80%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Nouvelle Tâche</Text>
+              <TouchableOpacity onPress={() => { setIsAddingTask(false); }}>
+                <Text style={{fontSize: 24, color: '#64748b'}}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              <Text style={styles.inputLabel}>Titre *</Text>
+              <TextInput style={styles.formInput} placeholder="Ex: Réserver la salle" value={newTask.title} onChangeText={t => setNewTask({...newTask, title: t})} />
+
+              <Text style={styles.inputLabel}>Assigné à</Text>
+              <TouchableOpacity
+                style={styles.dropdownSelector}
+                onPress={() => setIsAssignDropdownOpen(!isAssignDropdownOpen)}
+              >
+                <Text style={newTask.assigned_to ? styles.dropdownTextSelected : styles.dropdownTextPlaceholder}>
+                  {newTask.assigned_to
+                    ? activeMembers.find(m => m.user_id === newTask.assigned_to)?.member?.full_name || 'Membre'
+                    : '-- Non assigné --'}
+                </Text>
+                <Text style={{color: '#94a3b8'}}>▼</Text>
+              </TouchableOpacity>
+              {isAssignDropdownOpen && (
+                <View style={styles.dropdownContainer}>
+                  <TouchableOpacity style={styles.dropdownItem} onPress={() => { setNewTask({...newTask, assigned_to: ''}); setIsAssignDropdownOpen(false); }}>
+                    <Text style={[styles.dropdownItemText, {fontStyle: 'italic'}]}>-- Non assigné --</Text>
+                  </TouchableOpacity>
+                  {activeMembers.map(m => (
+                    <TouchableOpacity
+                      key={m.user_id}
+                      style={styles.dropdownItem}
+                      onPress={() => { setNewTask({...newTask, assigned_to: m.user_id}); setIsAssignDropdownOpen(false); }}
+                    >
+                      <Text style={styles.dropdownItemText}>{m.member?.full_name || 'Membre'}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              <Text style={styles.inputLabel}>Échéance</Text>
+              <View style={{marginTop: 8}}>
+                <DateTimePicker
+                  value={newTask.deadline ? new Date(newTask.deadline) : undefined}
+                  mode="date"
+                  display="default"
+                  style={styles.formInput}
+                  placeholder="Sélectionner la date"
+                  onChange={(e, d) => {
+                    if (d) { setDateObj(d); setNewTask({...newTask, deadline: d.toISOString().split('T')[0]}); }
+                  }}
+                />
+              </View>
+
+              <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingTask(false)}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddTask}>
+                  <Text style={styles.modalBtnSubmitText}>Créer</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* === MODALE : AJOUTER UN ÉQUIPEMENT === */}
+      <Modal visible={isAddingEq} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '70%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Nouvel Équipement</Text>
+              <TouchableOpacity onPress={() => setIsAddingEq(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity>
+            </View>
+            <ScrollView>
+              <Text style={styles.inputLabel}>Nom *</Text>
+              <TextInput style={styles.formInput} placeholder="Ex: Caméra Sony A7" value={newEq.name} onChangeText={t => setNewEq({...newEq, name: t})} />
+              <Text style={styles.inputLabel}>Catégorie</Text>
+              <View style={{flexDirection: 'row', gap: 8, flexWrap: 'wrap'}}>
+                {['Vidéo', 'Son', 'Éclairage', 'Divers'].map(cat => (
+                  <TouchableOpacity
+                    key={cat}
+                    onPress={() => setNewEq({...newEq, category: cat})}
+                    style={{
+                      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18,
+                      backgroundColor: newEq.category === cat ? '#0f172a' : '#fff',
+                      borderWidth: 1, borderColor: newEq.category === cat ? '#0f172a' : '#e2e8f0',
+                    }}
+                  >
+                    <Text style={{color: newEq.category === cat ? '#fff' : '#475569', fontSize: 12, fontWeight: '500'}}>{cat}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.inputLabel}>État</Text>
+              <View style={{flexDirection: 'row', gap: 8, flexWrap: 'wrap'}}>
+                {[{k: 'BON', c: '#10b981'}, {k: 'EN PANNE', c: '#ef4444'}, {k: 'EN REPARATION', c: '#f59e0b'}].map(s => (
+                  <TouchableOpacity
+                    key={s.k}
+                    onPress={() => setNewEq({...newEq, condition: s.k})}
+                    style={{
+                      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18,
+                      backgroundColor: newEq.condition === s.k ? s.c : '#fff',
+                      borderWidth: 1, borderColor: newEq.condition === s.k ? s.c : '#e2e8f0',
+                    }}
+                  >
+                    <Text style={{color: newEq.condition === s.k ? '#fff' : '#475569', fontSize: 12, fontWeight: '500'}}>{s.k}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingEq(false)}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddEq}>
+                  <Text style={styles.modalBtnSubmitText}>Ajouter</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* === MODALE : BESOIN D'ÉQUIPEMENT === */}
+      <Modal visible={isAddingEqNeed} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '60%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Nouveau Besoin</Text>
+              <TouchableOpacity onPress={() => setIsAddingEqNeed(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity>
+            </View>
+            <ScrollView>
+              <Text style={styles.inputLabel}>Article *</Text>
+              <TextInput style={styles.formInput} placeholder="Ex: Câble HDMI 5m" value={newEqNeed.item_name} onChangeText={t => setNewEqNeed({...newEqNeed, item_name: t})} />
+              <Text style={styles.inputLabel}>Priorité</Text>
+              <View style={{flexDirection: 'row', gap: 8, flexWrap: 'wrap'}}>
+                {[{k: 'FAIBLE', c: '#94a3b8'}, {k: 'MOYENNE', c: '#f59e0b'}, {k: 'HAUTE', c: '#ef4444'}].map(p => (
+                  <TouchableOpacity
+                    key={p.k}
+                    onPress={() => setNewEqNeed({...newEqNeed, priority: p.k})}
+                    style={{
+                      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18,
+                      backgroundColor: newEqNeed.priority === p.k ? p.c : '#fff',
+                      borderWidth: 1, borderColor: newEqNeed.priority === p.k ? p.c : '#e2e8f0',
+                    }}
+                  >
+                    <Text style={{color: newEqNeed.priority === p.k ? '#fff' : '#475569', fontSize: 12, fontWeight: '500'}}>{p.k}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingEqNeed(false)}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddEqNeed}>
+                  <Text style={styles.modalBtnSubmitText}>Soumettre</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -981,6 +1411,8 @@ const styles = StyleSheet.create({
   memberItem: { backgroundColor: '#fff', padding: 15, borderRadius: 16, marginBottom: 10, borderWidth: 1, borderColor: '#e2e8f0' },
   memberName: { fontWeight: 'bold', fontSize: 15, color: '#0f172a' },
   memberRole: { fontSize: 12, color: '#64748b', marginTop: 4, fontStyle: 'italic' },
+  memberExcludeBtn: { backgroundColor: '#fef2f2', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#fecaca' },
+  memberExcludeBtnText: { color: '#ef4444', fontWeight: 'bold', fontSize: 12 },
   assignBtn: { paddingVertical: 8, borderRadius: 8, marginTop: 5 },
   emptyText: { textAlign: 'center', marginTop: 40, color: '#94a3b8', fontStyle: 'italic' },
   
