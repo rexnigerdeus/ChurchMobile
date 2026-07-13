@@ -5,6 +5,19 @@
 
 import { Platform } from 'react-native';
 
+// Détermine le content-type à partir du nom de fichier / URI
+// afin d'éviter qu'un blob sans type explicite soit rejeté par
+// la policy MIME du bucket.
+function inferImageType(uri?: string, fallbackMime?: string): string {
+  if (fallbackMime && fallbackMime.startsWith('image/')) return fallbackMime;
+  if (!uri) return 'image/jpeg';
+  const ext = uri.split('.').pop()?.toLowerCase().split('?')[0]?.split('#')[0];
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  return 'image/jpeg';
+}
+
 export interface PickedImage {
   uri: string;
   width?: number;
@@ -95,7 +108,11 @@ export async function pickImage(options: {
           quality: options.quality ?? 0.7,
         })
       : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          // expo-image-picker 17 expose `MediaType` comme type union
+          // (string literal), pas comme constante runtime. On passe
+          // donc directement le tableau de strings, ce qui supprime
+          // le warning de dépréciation de MediaTypeOptions.
+          mediaTypes: ['images'],
           allowsEditing: options.allowsEditing ?? true,
           aspect: options.aspect ?? [1, 1],
           quality: options.quality ?? 0.7,
@@ -124,20 +141,31 @@ export async function uploadToSupabase(
   picked: PickedImage
 ): Promise<string> {
   try {
-    let body: any;
-    let contentType = picked.type || 'image/jpeg';
+    // Force le content-type à partir de l'URI / du picked.type.
+    // Sur iOS natif, expo-image-picker retourne parfois mimeType
+    // vide, ce qui fait que le blob n'a pas de type MIME reconnu
+    // et le serveur peut le refuser ou la policy RLS ne match pas.
+    const contentType = inferImageType(picked.uri || picked.fileName, picked.type);
 
+    let body: any;
     if (Platform.OS === 'web' && picked.blob) {
-      body = picked.blob;
+      // Web : on garde le Blob natif (File object du <input>).
+      body = picked.blob.type ? picked.blob : new Blob([picked.blob], { type: contentType });
     } else {
-      // Récupère un blob depuis l'uri (file://)
+      // Mobile (iOS / Android) : on convertit l'URI en Uint8Array
+      // via arrayBuffer(). C'est la forme la plus fiable pour
+      // expo-image-picker car le Blob issu de fetch(file://) sur
+      // iOS n'est pas toujours correctement sérialisé en multipart
+      // par le SDK Supabase, ce qui produit un fichier vide côté
+      // serveur et un "Unknown image download error" à l'affichage.
       const res = await fetch(picked.uri);
-      body = await res.blob();
-      if (picked.type) contentType = picked.type;
+      const arrayBuffer = await res.arrayBuffer();
+      body = new Uint8Array(arrayBuffer);
     }
 
     const { error } = await supabase.storage.from(bucket).upload(path, body, {
       contentType,
+      cacheControl: '3600',
       upsert: true,
     });
     if (error) {

@@ -77,31 +77,35 @@ export default function ProfileScreen() {
 
     setUpdating(true);
     try {
-      // S'assurer que le bucket existe : le créer si nécessaire
-      const { data: buckets } = await supabase.storage.listBuckets();
-      const bucketExists = buckets?.some((b: any) => b.id === PROFILE_PHOTOS_BUCKET);
-      if (!bucketExists) {
-        // Tentative de création automatique du bucket (public, 5 Mo)
-        const { error: createErr } = await supabase.storage.createBucket(PROFILE_PHOTOS_BUCKET, {
-          public: true,
-          fileSizeLimit: 5242880,
-          allowedMimeTypes: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'],
-        });
-        if (createErr) {
-          throw new Error(
-            `Le bucket "${PROFILE_PHOTOS_BUCKET}" n'existe pas et ne peut pas être créé automatiquement. ` +
-            `Créez-le manuellement dans Supabase Dashboard → Storage → New bucket (nom: "${PROFILE_PHOTOS_BUCKET}", Public: oui). ` +
-            `Erreur technique: ${createErr.message}`
-          );
-        }
-      }
-
+      // On tente d'abord l'upload directement. Si le bucket n'existe
+      // pas, l'upload renverra une erreur explicite. On évite d'appeler
+      // createBucket() côté client : seuls les admins (service_role)
+      // ont ce droit, donc la création auto échouait avec une erreur
+      // RLS qui masquait la vraie cause.
       const fileName = `${user.id}/${Date.now()}.jpg`;
       let publicUrl: string;
       try {
         publicUrl = await uploadToSupabase(supabase, PROFILE_PHOTOS_BUCKET, fileName, picked);
       } catch (uploadErr: any) {
-        throw new Error(`Échec de l'upload : ${uploadErr?.message || 'inconnu'}`);
+        const msg = uploadErr?.message || 'inconnu';
+        const isRls = /row-level security|policy/i.test(msg);
+        const isBucketMissing = /bucket|not found|404|does not exist/i.test(msg);
+        if (isBucketMissing) {
+          throw new Error(
+            `Le bucket "${PROFILE_PHOTOS_BUCKET}" est introuvable côté serveur. ` +
+            `Vérifiez que la migration 20260625_profile_photos_bucket.sql ` +
+            `a bien été appliquée (Dashboard → SQL Editor).`
+          );
+        }
+        if (isRls) {
+          throw new Error(
+            `Upload refusé par les politiques RLS.\n\n` +
+            `Cause probable : la migration 20260708_profile_photos_rls_fix.sql ` +
+            `n'a pas été appliquée. Exécutez-la dans Supabase → SQL Editor.\n\n` +
+            `Détail technique : ${msg}`
+          );
+        }
+        throw new Error(`Échec de l'upload : ${msg}`);
       }
 
       // Stocker l'URL dans la bonne table
@@ -136,7 +140,13 @@ export default function ProfileScreen() {
         );
       }
 
-      setProfile({ ...profile, photo_url: publicUrl });
+      // On force la mise à jour du state en créant un nouvel objet
+      // ET on ajoute un cache-buster (?t=) à l'URL publique pour
+      // éviter que iOS / React Native serve une version cachée
+      // (l'upsert peut garder l'ancienne image si le navigateur
+      // met l'URL en cache HTTP).
+      const photoUrlWithCacheBuster = `${publicUrl}${publicUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+      setProfile((prev: any) => ({ ...prev, photo_url: photoUrlWithCacheBuster }));
       Alert.alert('Succès', 'Photo de profil mise à jour !');
     } catch (e: any) {
       Alert.alert('Erreur', e?.message || "Impossible d'uploader la photo.");
@@ -168,7 +178,13 @@ export default function ProfileScreen() {
       {/* Photo de profil */}
       <View style={styles.photoContainer}>
         {profile.photo_url ? (
-          <Image source={{ uri: profile.photo_url }} style={styles.profilePhoto} />
+          <Image
+            key={profile.photo_url}
+            source={{ uri: profile.photo_url }}
+            style={styles.profilePhoto}
+            onError={(e) => console.warn('[ProfileScreen] image load error', e.nativeEvent?.error)}
+            onLoad={() => console.log('[ProfileScreen] image loaded ok', profile.photo_url)}
+          />
         ) : (
           <View style={styles.profilePhotoPlaceholder}>
             <Text style={styles.profilePhotoPlaceholderText}>
