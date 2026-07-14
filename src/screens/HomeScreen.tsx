@@ -53,17 +53,61 @@ export default function HomeScreen({
         const churchId = role?.entity_id || crm?.church_id;
 
         if (churchId) {
-          const { data: ann } = await supabase.from('church_announcements').select('*').eq('church_id', churchId).order('created_at', { ascending: false }).limit(3);
-          setAnnouncements(ann || []);
-          const { data: prog } = await supabase.from('church_programs').select('*').eq('church_id', churchId).gte('start_at', new Date().toISOString()).order('start_at', { ascending: true }).limit(3);
-          setPrograms(prog || []);
-        }
-        setLoadingFeed(false);
-      }
-      loadFeed();
-    }, []);
+          // Annonces récentes uniquement (publiées il y a moins de 30 jours).
+          // On ne montre pas les "annonces passées" : une annonce vieille
+          // de plus d'un mois n'a plus de valeur informative pour le
+          // fidèle qui ouvre l'app aujourd'hui.
+          // → Filtre : created_at > now() - 30 jours
+          const thirtyDaysAgo = new Date(Date.now() - 30 * 86400 * 1000).toISOString()
+          const { data: ann } = await supabase
+            .from('church_announcements')
+            .select('*')
+            .eq('church_id', churchId)
+            .gt('created_at', thirtyDaysAgo)
+            .order('created_at', { ascending: false })
+            .limit(3)
+          setAnnouncements(ann || [])
 
-    const formatDate = (date: string) => new Date(date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+          // Programmes à venir (ponctuels + occurrences matérialisées
+          // depuis les templates récurrents). Les deux types vivent dans
+          // la même table `church_programs` (cf. RPC materialize_*) →
+          // une seule requête suffit pour tout afficher de façon
+          // cohérente. On filtre :
+          //   - is_archived = false : exclut les programmes passés
+          //                          archivés par l'admin
+          //   - start_at >= now     : on ne montre que le futur
+          // Tri : start_at ASC → du plus proche au plus loin.
+          const { data: prog } = await supabase
+            .from('church_programs')
+            .select('*')
+            .eq('church_id', churchId)
+            .eq('is_archived', false)
+            .gte('start_at', new Date().toISOString())
+            .order('start_at', { ascending: true })
+            .limit(10)
+          setPrograms(prog || [])
+        }
+        setLoadingFeed(false)
+      }
+      loadFeed()
+    }, [])
+
+    // Format court : ex. "dim. 14 juil., 09:00"
+    const formatDate = (date: string) => new Date(date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+
+    // Détecte si un programme est une occurrence d'un template récurrent.
+    // Heuristique : on considère récurrent tout programme qui n'a PAS
+    // de description ET qui a un location == 'Temple principal' (valeur
+    // par défaut posée par le formulaire de récurrence) ET dont la
+    // catégorie n'est pas "Événement".
+    // → Si l'admin a posé un event "exceptionnel" (Séminaire, Événement)
+    //   ou renseigné une description, on l'affiche comme ponctuel.
+    function isRecurringOccurrence(p: any): boolean {
+      if (p.description && p.description.trim().length > 0) return false
+      const punctualCats = ['Événement', 'Séminaire']
+      if (punctualCats.includes(p.category)) return false
+      return true
+    }
 
     return (
       <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator={false}>
@@ -84,7 +128,24 @@ export default function HomeScreen({
             <Text style={styles.sectionTitle}>Actualités de l'Église</Text>
             {announcements.length === 0 ? (<Text style={styles.emptyText}>Aucune annonce.</Text>) : (announcements.map(ann => (<View key={ann.id} style={styles.announcementCard}>{ann.is_pinned && <Text style={styles.pinnedBadge}>📌 Épinglé</Text>}<Text style={styles.announcementTitle}>{ann.title}</Text><Text style={styles.announcementBody} numberOfLines={3}>{ann.body}</Text><Text style={styles.dateText}>{new Date(ann.created_at).toLocaleDateString('fr-FR')}</Text></View>)))}
             <Text style={styles.sectionTitle}>Planning des réunions</Text>
-            {programs.length === 0 ? (<Text style={styles.emptyText}>Aucun programme.</Text>) : (<ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingBottom: 10 }}>{programs.map(prog => (<View key={prog.id} style={styles.programCard}><Text style={styles.programCategory}>{prog.category || 'Événement'}</Text><Text style={styles.programTitle} numberOfLines={1}>{prog.title}</Text><Text style={styles.programTime}>⏱ {formatDate(prog.start_at)}</Text><Text style={styles.programLocation}>📍 {prog.location}</Text></View>))}</ScrollView>)}
+            {programs.length === 0 ? (<Text style={styles.emptyText}>Aucun programme.</Text>) : (<ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingBottom: 10 }}>{programs.map(prog => {
+              const isRecurring = isRecurringOccurrence(prog)
+              return (
+                <View key={prog.id} style={styles.programCard}>
+                  <View style={styles.programHeaderRow}>
+                    <Text style={styles.programCategory}>{prog.category || 'Événement'}</Text>
+                    {isRecurring && (
+                      <View style={styles.recurringBadge}>
+                        <Text style={styles.recurringBadgeText}>🔁 Récurrent</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.programTitle} numberOfLines={1}>{prog.title}</Text>
+                  <Text style={styles.programTime}>⏱ {formatDate(prog.start_at)}</Text>
+                  <Text style={styles.programLocation}>📍 {prog.location}</Text>
+                </View>
+              )
+            })}</ScrollView>)}
           </>
         )}
       </ScrollView>
@@ -271,8 +332,11 @@ const styles = StyleSheet.create({
   announcementTitle: { fontSize: 15, fontWeight: 'bold', color: '#0f172a', marginBottom: 4 },
   announcementBody: { fontSize: 13, color: '#475569', lineHeight: 20 },
   dateText: { fontSize: 10, color: '#94a3b8', marginTop: 8, textAlign: 'right' },
-  programCard: { backgroundColor: '#0f172a', padding: 16, borderRadius: 16, width: 220, marginRight: 15 },
-  programCategory: { color: '#38bdf8', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 4 },
+  programCard: { backgroundColor: '#0f172a', padding: 16, borderRadius: 16, width: 240, marginRight: 15 },
+  programHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  programCategory: { color: '#38bdf8', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' },
+  recurringBadge: { backgroundColor: 'rgba(56, 189, 248, 0.15)', borderColor: '#38bdf8', borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  recurringBadgeText: { color: '#38bdf8', fontSize: 9, fontWeight: 'bold' },
   programTitle: { color: '#fff', fontSize: 16, fontWeight: 'bold', marginBottom: 10 },
   programTime: { color: '#cbd5e1', fontSize: 12, marginBottom: 4 },
   programLocation: { color: '#94a3b8', fontSize: 11 },
