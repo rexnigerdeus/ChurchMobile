@@ -40,6 +40,10 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [newGroupName, setNewGroupName] = useState('');
   const [selectedMember, setSelectedMember] = useState<any>(null); 
   const [memberFilter, setMemberFilter] = useState('Tous'); // 🔴 FILTRE GROUPES
+  // 🔴 Set des user_ids des adjoints du département (rechargé en parallèle)
+  const [deputyUserIds, setDeputyUserIds] = useState<Set<string>>(new Set());
+  // 🔴 ID du membre en cours de promotion (pour afficher un loader sur la carte)
+  const [promotingMemberId, setPromotingMemberId] = useState<string | null>(null);
 
   const [songs, setSongs] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -57,6 +61,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [allChurchPrograms, setAllChurchPrograms] = useState<any[]>([]); 
   const [planningRoles, setPlanningRoles] = useState<any[]>([]);
   const [isAddingPlanning, setIsAddingPlanning] = useState(false);
+  const [editingPlanning, setEditingPlanning] = useState<any | null>(null); // 🔴 édition d'un planning existant
   const [selectedChurchProgram, setSelectedChurchProgram] = useState<any>(null);
   
   const [dateObj, setDateObj] = useState<Date | undefined>(undefined);
@@ -68,6 +73,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
 
   const [announcements, setAnnouncements] = useState<any[]>([]);
   const [isAddingAnnouncement, setIsAddingAnnouncement] = useState(false);
+  const [editingAnnouncement, setEditingAnnouncement] = useState<any | null>(null); // 🔴 édition d'une annonce existante
   const [newAnnouncement, setNewAnnouncement] = useState({ title: '', content: '', concerns_all: true, selected_groups: [] as string[] });
 
   const [childrenList, setChildrenList] = useState<any[]>([]);
@@ -111,6 +117,20 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     if (deptId) loadInitialData(true);
   }, [deptId]);
 
+  // 🔴 Charger l'état "déjà adjoint" quand on sélectionne un membre dans la modale
+  const [memberIsDeputy, setMemberIsDeputy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (selectedMember?.user_id) {
+      isMemberAlreadyDeputy(selectedMember.user_id).then(isDeputy => {
+        if (!cancelled) setMemberIsDeputy(isDeputy);
+      });
+    } else {
+      setMemberIsDeputy(false);
+    }
+    return () => { cancelled = true; };
+  }, [selectedMember?.user_id]);
+
   // 🚀 OPTIMISATION : Requêtes parallèles massives pour un chargement instantané
   async function loadInitialData(showSpinner = true) {
     if (showSpinner) setLoading(true);
@@ -142,10 +162,40 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         }
       }
 
+      // 🔴 Résolution du rôle d'accès au dashboard : MANAGER ou ADJOINT
+      //    On ouvre l'accès à l'adjoint (assistant_manager_id) en plus du
+      //    manager (DEPARTMENT_LEADER) déjà géré historiquement.
+      //    `isLeader` couvre les deux → permet l'édition des annonces et
+      //    plannings du département, comme demandé.
+      let hasLeaderAccess = false
+      if (dept && user?.id) {
+        // 1) Le user a-t-il une ligne user_roles pour ce département ?
+        const { data: leaderRole } = await supabase
+          .from('user_roles')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('role', 'DEPARTMENT_LEADER')
+          .eq('department_id', deptId)
+          .maybeSingle()
+        if (leaderRole) hasLeaderAccess = true
+
+        // 2) Sinon : est-il listé comme assistant_manager_id du département ?
+        if (!hasLeaderAccess && dept.assistant_manager_id) {
+          const { data: asstMember } = await supabase
+            .from('church_members')
+            .select('id')
+            .eq('id', dept.assistant_manager_id)
+            .eq('user_id', user.id)
+            .maybeSingle()
+          if (asstMember) hasLeaderAccess = true
+        }
+      }
+      setIsLeader(hasLeaderAccess)
+
       // Parallélisation des requêtes de base
       const [
         roleDataRes, groupsRes, allReqsRes, rawPlanningsRes, rawPlanGroupsRes, 
-        rawFinancesRes, cProgramsRes, rawAnnsRes, rawAnnGroupsRes
+        rawFinancesRes, cProgramsRes, rawAnnsRes, rawAnnGroupsRes, deputyRolesRes
       ] = await Promise.all([
         supabase.from('user_roles').select('*').eq('user_id', user?.id).eq('role', 'DEPARTMENT_LEADER').eq('department_id', deptId).maybeSingle(),
         supabase.from('department_groups').select('*').eq('department_id', deptId).order('created_at', { ascending: true }),
@@ -155,11 +205,31 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         supabase.from('department_finances').select('*').eq('department_id', deptId).order('created_at', { ascending: false }),
         dept?.church_id ? supabase.from('church_programs').select('*').eq('church_id', dept.church_id) : Promise.resolve({ data: [] }),
         supabase.from('department_announcements').select('*').eq('department_id', deptId).order('created_at', { ascending: false }),
-        supabase.from('department_announcement_groups').select('*')
+        supabase.from('department_announcement_groups').select('*'),
+        // 🔴 Récupération en parallèle de tous les adjoints du département
+        //    pour mettre à jour le badge "Adjoint" sur la carte membre.
+        supabase.from('user_roles').select('user_id').eq('role', 'DEPARTMENT_LEADER').eq('department_id', deptId)
       ]);
 
-      setIsLeader(!!roleDataRes.data);
       setGroups(groupsRes.data || []);
+
+      // 🔴 Mise à jour du Set des user_ids adjoints pour l'affichage des badges
+      if (deputyRolesRes.data) {
+        const ids = new Set<string>();
+        for (const r of deputyRolesRes.data) ids.add(r.user_id);
+        // L'adjoint historique (assistant_manager_id) est aussi inclus
+        // pour qu'on puisse afficher son badge sans re-requête.
+        if (dept?.assistant_manager_id) {
+          // On doit récupérer le user_id de ce church_member :
+          const { data: asstUser } = await supabase
+            .from('church_members')
+            .select('user_id')
+            .eq('id', dept.assistant_manager_id)
+            .maybeSingle();
+          if (asstUser?.user_id) ids.add(asstUser.user_id);
+        }
+        setDeputyUserIds(ids);
+      }
 
       let activeMembs: any[] = [];
       if (allReqsRes.data) {
@@ -254,6 +324,158 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     setNewGroupName(''); 
     if(error) Alert.alert("Erreur", error.message); 
     else { loadInitialData(false); } 
+  };
+
+  // 🔴 Nommer un membre comme adjoint du département (DEPARTMENT_LEADER)
+  //    Accessible directement depuis la vue "Membres" du mobile.
+  //    Insère une ligne dans `user_roles` qui donne accès au dashboard
+  //    du département au même titre que le responsable principal.
+  const handleAppointAsDeputy = async (memberUserId: string, memberName: string) => {
+    // Garde-fou immédiat : empêcher le double-clic
+    if (promotingMemberId) return;
+    if (deputyUserIds.has(memberUserId)) {
+      return Alert.alert('Déjà nommé', `${memberName} est déjà adjoint(e) du département.`);
+    }
+    Alert.alert(
+      'Nommer comme adjoint',
+      `Voulez-vous vraiment nommer ${memberName} comme adjoint(e) du département ?\n\nIl/Elle aura accès au dashboard du département.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Confirmer',
+          onPress: async () => {
+            setPromotingMemberId(memberUserId);
+            try {
+              // Vérification : ne pas nommer quelqu'un qui a déjà un rôle église direction
+              const { data: existing } = await supabase
+                .from('user_roles')
+                .select('id, role')
+                .eq('user_id', memberUserId)
+                .in('role', ['CHURCH_LEADER', 'ASSISTANT_PASTOR', 'SECRETARY', 'FINANCE_MANAGER'])
+                .maybeSingle();
+              if (existing) {
+                return Alert.alert(
+                  'Rôle incompatible',
+                  `Ce membre a déjà le rôle église "${existing.role}". Retirez ce rôle avant de le nommer adjoint du département.`,
+                );
+              }
+              // Vérifier qu'il n'est pas déjà adjoint sur ce département
+              const { data: dupDeputy } = await supabase
+                .from('user_roles')
+                .select('id')
+                .eq('user_id', memberUserId)
+                .eq('role', 'DEPARTMENT_LEADER')
+                .eq('department_id', deptId)
+                .maybeSingle();
+              if (dupDeputy) {
+                return Alert.alert('Déjà nommé', 'Ce membre est déjà adjoint de ce département.');
+              }
+              // Trouver la fiche church_members (church_id matching dept)
+              const { data: memberRow } = await supabase
+                .from('church_members')
+                .select('id')
+                .eq('user_id', memberUserId)
+                .eq('church_id', deptInfo?.church_id)
+                .maybeSingle();
+              // Insérer le rôle DEPARTMENT_LEADER
+              const { error: insErr } = await supabase.from('user_roles').insert({
+                user_id: memberUserId,
+                role: 'DEPARTMENT_LEADER',
+                entity_id: deptId,            // ← pointe sur church_department.id
+                department_id: deptId,
+              });
+              if (insErr) return Alert.alert('Erreur', insErr.message);
+              // (Optionnel) Synchroniser la colonne assistant_manager_id pour le mode historique
+              if (memberRow?.id) {
+                await supabase
+                  .from('church_departments')
+                  .update({ assistant_manager_id: memberRow.id })
+                  .eq('id', deptId);
+              }
+              // 🔴 Mise à jour optimiste du Set local pour voir le badge
+              //    immédiatement, sans attendre le rechargement.
+              setDeputyUserIds(prev => {
+                const next = new Set(prev);
+                next.add(memberUserId);
+                return next;
+              });
+              Alert.alert('✅ Succès', `${memberName} est maintenant adjoint(e) du département.`);
+              loadInitialData(false);
+            } finally {
+              setPromotingMemberId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // 🔴 Révoquer le rôle d'adjoint du département
+  const handleRevokeDeputy = async (memberUserId: string, memberName: string) => {
+    if (promotingMemberId) return;
+    if (!deputyUserIds.has(memberUserId)) {
+      return Alert.alert('Aucun rôle', `${memberName} n'est pas adjoint(e) du département.`);
+    }
+    Alert.alert(
+      'Révoquer le rôle d\'adjoint',
+      `Retirer ${memberName} de son rôle d'adjoint(e) du département ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Révoquer',
+          style: 'destructive',
+          onPress: async () => {
+            setPromotingMemberId(memberUserId);
+            try {
+              const { error } = await supabase
+                .from('user_roles')
+                .delete()
+                .eq('user_id', memberUserId)
+                .eq('role', 'DEPARTMENT_LEADER')
+                .eq('department_id', deptId);
+              if (error) return Alert.alert('Erreur', error.message);
+              // Nettoyer la colonne assistant_manager_id si elle pointait sur ce membre
+              const { data: memberRow } = await supabase
+                .from('church_members')
+                .select('id')
+                .eq('user_id', memberUserId)
+                .eq('church_id', deptInfo?.church_id)
+                .maybeSingle();
+              if (memberRow?.id) {
+                await supabase
+                  .from('church_departments')
+                  .update({ assistant_manager_id: null })
+                  .eq('id', deptId)
+                  .eq('assistant_manager_id', memberRow.id);
+              }
+              // 🔴 Mise à jour optimiste du Set local
+              setDeputyUserIds(prev => {
+                const next = new Set(prev);
+                next.delete(memberUserId);
+                return next;
+              });
+              Alert.alert('✅ Rôle révoqué', `${memberName} n'est plus adjoint(e) du département.`);
+              loadInitialData(false);
+            } finally {
+              setPromotingMemberId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // Vérifie si un membre est déjà nommé adjoint (DEPARTMENT_LEADER) sur ce département
+  const isMemberAlreadyDeputy = async (userId: string): Promise<boolean> => {
+    if (!userId) return false;
+    const { data } = await supabase
+      .from('user_roles')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('role', 'DEPARTMENT_LEADER')
+      .eq('department_id', deptId)
+      .maybeSingle();
+    return !!data;
   };
 
   // 🔴 NOUVEAU : Contrôles stricts pour Dénombrement (Max 4/jour, Anti-doublon, Modification)
@@ -360,7 +582,52 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       const inserts = newAnnouncement.selected_groups.map(gId => ({ announcement_id: annData.id, group_id: gId }));
       await supabase.from('department_announcement_groups').insert(inserts);
     }
-    setIsAddingAnnouncement(false); setNewAnnouncement({ title: '', content: '', concerns_all: true, selected_groups: [] }); loadInitialData(false);
+    setIsAddingAnnouncement(false); setEditingAnnouncement(null); setNewAnnouncement({ title: '', content: '', concerns_all: true, selected_groups: [] }); loadInitialData(false);
+  };
+
+  // 🔴 Modification d'une annonce (responsable / adjoint autorisé)
+  const handleEditAnnouncement = async () => {
+    if (!editingAnnouncement) return;
+    if (!newAnnouncement.title.trim() || !newAnnouncement.content.trim()) return Alert.alert("Erreur", "Titre et contenu obligatoires.");
+    const concernsAll = hasSubGroups ? newAnnouncement.concerns_all : true;
+    const { error } = await supabase.from('department_announcements').update({
+      title: newAnnouncement.title.trim(),
+      content: newAnnouncement.content.trim(),
+      concerns_all: concernsAll,
+    }).eq('id', editingAnnouncement.id);
+    if (error) return Alert.alert('Erreur', error.message);
+    // Mise à jour des sous-groupes ciblés
+    await supabase.from('department_announcement_groups').delete().eq('announcement_id', editingAnnouncement.id);
+    if (!concernsAll && newAnnouncement.selected_groups.length > 0) {
+      const inserts = newAnnouncement.selected_groups.map(gId => ({ announcement_id: editingAnnouncement.id, group_id: gId }));
+      await supabase.from('department_announcement_groups').insert(inserts);
+    }
+    setIsAddingAnnouncement(false); setEditingAnnouncement(null); setNewAnnouncement({ title: '', content: '', concerns_all: true, selected_groups: [] }); loadInitialData(false);
+  };
+
+  // 🔴 Suppression d'une annonce
+  const handleDeleteAnnouncement = (ann: any) => {
+    Alert.alert("Supprimer l'annonce", `Voulez-vous vraiment supprimer « ${ann.title} » ?`, [
+      { text: "Annuler", style: "cancel" },
+      { text: "Supprimer", style: 'destructive', onPress: async () => {
+        setAnnouncements(prev => prev.filter(a => a.id !== ann.id));
+        await supabase.from('department_announcement_groups').delete().eq('announcement_id', ann.id);
+        await supabase.from('department_announcements').delete().eq('id', ann.id);
+        loadInitialData(false);
+      }}
+    ]);
+  };
+
+  // 🔴 Pré-remplir le formulaire d'annonce pour édition
+  const startEditAnnouncement = (ann: any) => {
+    setEditingAnnouncement(ann);
+    setNewAnnouncement({
+      title: ann.title,
+      content: ann.content,
+      concerns_all: ann.concerns_all,
+      selected_groups: ann.assigned_groups || [],
+    });
+    setIsAddingAnnouncement(true);
   };
   const handleAddPlanning = async (isJoiningChurchProgram: boolean = false, autoChurchProg?: any) => {
     if (!isJoiningChurchProgram && (!newPlanning.title.trim() || !newPlanning.date || !newPlanning.time)) return Alert.alert("Erreur", "Requis.");
@@ -382,7 +649,62 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       const inserts = newPlanning.selected_groups.map(gId => ({ planning_id: planData.id, group_id: gId }));
       await supabase.from('department_planning_groups').insert(inserts);
     }
-    setIsAddingPlanning(false); setSelectedChurchProgram(null); setNewPlanning({ title: '', date: '', time: '', description: '', is_church_event: false, concerns_all: true, selected_groups: [] }); loadInitialData(false);
+    setIsAddingPlanning(false); setEditingPlanning(null); setSelectedChurchProgram(null); setNewPlanning({ title: '', date: '', time: '', description: '', is_church_event: false, concerns_all: true, selected_groups: [] }); loadInitialData(false);
+  };
+
+  // 🔴 Modification d'un planning (responsable / adjoint autorisé)
+  const handleEditPlanning = async () => {
+    if (!editingPlanning) return;
+    if (!newPlanning.title.trim() || !newPlanning.date || !newPlanning.time) return Alert.alert("Erreur", "Requis.");
+    const dateObjParsed = new Date(`${newPlanning.date}T${newPlanning.time}:00`);
+    if (isNaN(dateObjParsed.getTime())) return Alert.alert("Erreur", "Date invalide.");
+    const concernsAll = hasSubGroups ? newPlanning.concerns_all : true;
+    const { error } = await supabase.from('department_plannings').update({
+      title: newPlanning.title.trim(),
+      event_date: dateObjParsed.toISOString(),
+      description: newPlanning.description.trim() || null,
+      concerns_all: concernsAll,
+    }).eq('id', editingPlanning.id);
+    if (error) return Alert.alert('Erreur', error.message);
+    await supabase.from('department_planning_groups').delete().eq('planning_id', editingPlanning.id);
+    if (!concernsAll && newPlanning.selected_groups.length > 0) {
+      const inserts = newPlanning.selected_groups.map(gId => ({ planning_id: editingPlanning.id, group_id: gId }));
+      await supabase.from('department_planning_groups').insert(inserts);
+    }
+    setIsAddingPlanning(false); setEditingPlanning(null); setNewPlanning({ title: '', date: '', time: '', description: '', is_church_event: false, concerns_all: true, selected_groups: [] }); loadInitialData(false);
+  };
+
+  // 🔴 Suppression d'un planning
+  const handleDeletePlanning = (plan: any) => {
+    Alert.alert("Supprimer le planning", `Voulez-vous vraiment supprimer « ${plan.title} » ?`, [
+      { text: "Annuler", style: "cancel" },
+      { text: "Supprimer", style: 'destructive', onPress: async () => {
+        setPlannings(prev => prev.filter(p => p.id !== plan.id));
+        // Nettoyer les rôles assignés et les sous-groupes liés
+        await supabase.from('department_planning_roles').delete().eq('planning_id', plan.id);
+        await supabase.from('department_planning_groups').delete().eq('planning_id', plan.id);
+        await supabase.from('department_plannings').delete().eq('id', plan.id);
+        loadInitialData(false);
+      }}
+    ]);
+  };
+
+  // 🔴 Pré-remplir le formulaire de planning pour édition
+  const startEditPlanning = (plan: any) => {
+    setEditingPlanning(plan);
+    const d = new Date(plan.event_date);
+    const dateStr = d.toISOString().split('T')[0];
+    const timeStr = d.toTimeString().substring(0, 5);
+    setNewPlanning({
+      title: plan.title,
+      date: dateStr,
+      time: timeStr,
+      description: plan.description || '',
+      is_church_event: !!plan.is_church_event,
+      concerns_all: plan.concerns_all,
+      selected_groups: plan.assigned_groups || [],
+    });
+    setIsAddingPlanning(true);
   };
   const handleAddChild = async () => {
     if (!newChild.first_name.trim() || !newChild.last_name.trim() || !newChild.class_id) return Alert.alert("Erreur", "Nom, prénom et classe requis.");
@@ -603,21 +925,62 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                 renderItem={({ item }) => {
                 const ledGroup = groups.find(g => g.leader_id === item.user_id);
                 const assignedGroup = groups.find(g => g.id === item.sub_group_id);
+                const isDeputy = deputyUserIds.has(item.user_id);
+                const isPromoting = promotingMemberId === item.user_id;
+                // Ne pas afficher le bouton "Promouvoir" pour le user courant
+                // (il est déjà manager — pas la peine de s'auto-promouvoir adjoint)
+                const canShowPromoteBtn = item.user_id !== currentUserId;
                 return (
-                  <View style={[styles.memberItem, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
-                    <TouchableOpacity
-                      style={{ flex: 1, paddingRight: 10 }}
-                      onPress={() => setSelectedMember(item)}
-                    >
-                      <Text style={styles.memberName}>{item.member.full_name}</Text>
-                      {hasSubGroups && <Text style={styles.memberRole}>{ledGroup ? `👑 Responsable : ${ledGroup.name}` : assignedGroup ? `👥 Appartient à : ${assignedGroup.name}` : 'Membre simple'}</Text>}
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.memberExcludeBtn}
-                      onPress={() => handleRemoveMemberFromDept(item.id)}
-                    >
-                      <Text style={styles.memberExcludeBtnText}>✕ Exclure</Text>
-                    </TouchableOpacity>
+                  <View style={[styles.memberItem, { flexDirection: 'column', alignItems: 'stretch' }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <TouchableOpacity
+                        style={{ flex: 1, paddingRight: 10 }}
+                        onPress={() => setSelectedMember(item)}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <Text style={styles.memberName}>{item.member.full_name}</Text>
+                          {isDeputy && (
+                            <View style={styles.deputyBadge}>
+                              <Text style={styles.deputyBadgeText}>⭐ Adjoint</Text>
+                            </View>
+                          )}
+                        </View>
+                        {hasSubGroups && <Text style={styles.memberRole}>{ledGroup ? `👑 Responsable : ${ledGroup.name}` : assignedGroup ? `👥 Appartient à : ${assignedGroup.name}` : 'Membre simple'}</Text>}
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.memberExcludeBtn}
+                        onPress={() => handleRemoveMemberFromDept(item.id)}
+                      >
+                        <Text style={styles.memberExcludeBtnText}>✕ Exclure</Text>
+                      </TouchableOpacity>
+                    </View>
+                    {/* 🔴 Bouton "Promouvoir" sur la carte — accès direct sans ouvrir la modale */}
+                    {canShowPromoteBtn && !isDeputy && (
+                      <TouchableOpacity
+                        style={styles.promoteCardBtn}
+                        onPress={() => handleAppointAsDeputy(item.user_id, item.member.full_name)}
+                        disabled={isPromoting}
+                      >
+                        {isPromoting ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Text style={styles.promoteCardBtnText}>👥 Promouvoir comme adjoint(e)</Text>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                    {canShowPromoteBtn && isDeputy && (
+                      <TouchableOpacity
+                        style={[styles.promoteCardBtn, { backgroundColor: '#fee2e2' }]}
+                        onPress={() => handleRevokeDeputy(item.user_id, item.member.full_name)}
+                        disabled={isPromoting}
+                      >
+                        {isPromoting ? (
+                          <ActivityIndicator size="small" color="#ef4444" />
+                        ) : (
+                          <Text style={[styles.promoteCardBtnText, { color: '#ef4444' }]}>🗑 Révoquer le rôle d'adjoint</Text>
+                        )}
+                      </TouchableOpacity>
+                    )}
                   </View>
                 );
               }}/>
@@ -742,10 +1105,53 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
              <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
                <View style={styles.financeHeader}>
                  <Text style={styles.hubSubtitle}>{isMediaDept ? "Agenda & Postes" : "Agenda & Événements"}</Text>
-                 {isLeader && <TouchableOpacity style={[styles.addFinanceBtn, { backgroundColor: '#06b6d4' }]} onPress={() => setIsAddingPlanning(true)}><Text style={styles.addFinanceBtnText}>+ Ajouter</Text></TouchableOpacity>}
+                 {isLeader && <TouchableOpacity style={[styles.addFinanceBtn, { backgroundColor: '#06b6d4' }]} onPress={() => { setEditingPlanning(null); setIsAddingPlanning(true); }}><Text style={styles.addFinanceBtnText}>+ Ajouter</Text></TouchableOpacity>}
                </View>
                <Text style={styles.sectionTitle}>📅 Notre Planning</Text>
-               {plannings.length === 0 ? <Text style={styles.emptyText}>Aucun événement programmé.</Text> : plannings.map(item => (<View key={item.id} style={styles.planningCard}><Text style={styles.planningTitle}>{item.title}</Text></View>))}
+               {plannings.length === 0 ? (
+                 <Text style={styles.emptyText}>Aucun événement programmé.</Text>
+               ) : plannings.map(item => {
+                 const d = new Date(item.event_date);
+                 const dateStr = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                 const timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                 const planRoles = planningRoles.filter(r => r.planning_id === item.id);
+                 return (
+                   <View key={item.id} style={styles.planningCard}>
+                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                       <View style={{ flex: 1, paddingRight: 8 }}>
+                         <Text style={[styles.planningTitle, { marginBottom: 4 }]}>{item.title}</Text>
+                         {/* 🔴 BUGFIX : la date et l'heure étaient absentes */}
+                         <Text style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>🗓 {dateStr}</Text>
+                         <Text style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>⏰ {timeStr}</Text>
+                         {item.description ? <Text style={{ fontSize: 13, color: '#475569', marginTop: 6 }}>{item.description}</Text> : null}
+                         {planRoles.length > 0 ? (
+                           <View style={{ marginTop: 8 }}>
+                             {planRoles.map(r => (
+                               <Text key={r.id} style={{ fontSize: 12, color: '#334155' }}>👤 {r.role_name} : {r.member_name}</Text>
+                             ))}
+                           </View>
+                         ) : null}
+                       </View>
+                       {isLeader && (
+                         <View style={{ flexDirection: 'row', gap: 6 }}>
+                           <TouchableOpacity
+                             style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#e0f2fe', alignItems: 'center', justifyContent: 'center' }}
+                             onPress={() => startEditPlanning(item)}
+                           >
+                             <Text style={{ fontSize: 14 }}>✏️</Text>
+                           </TouchableOpacity>
+                           <TouchableOpacity
+                             style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}
+                             onPress={() => handleDeletePlanning(item)}
+                           >
+                             <Text style={{ fontSize: 14 }}>🗑</Text>
+                           </TouchableOpacity>
+                         </View>
+                       )}
+                     </View>
+                   </View>
+                 );
+               })}
                <View style={{ height: 40 }} />
              </ScrollView>
           )}
@@ -754,9 +1160,37 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
              <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
                <View style={styles.financeHeader}>
                  <Text style={styles.hubSubtitle}>Communiqués Officiels</Text>
-                 {isLeader && <TouchableOpacity style={[styles.addFinanceBtn, { backgroundColor: '#ec4899' }]} onPress={() => setIsAddingAnnouncement(true)}><Text style={styles.addFinanceBtnText}>+ Annonce</Text></TouchableOpacity>}
+                 {isLeader && <TouchableOpacity style={[styles.addFinanceBtn, { backgroundColor: '#ec4899' }]} onPress={() => { setEditingAnnouncement(null); setIsAddingAnnouncement(true); }}><Text style={styles.addFinanceBtnText}>+ Annonce</Text></TouchableOpacity>}
                </View>
-               {announcements.length === 0 ? <Text style={styles.emptyText}>Aucune annonce publiée.</Text> : announcements.map(item => (<View key={item.id} style={[styles.planningCard, {borderLeftWidth: 4, borderLeftColor: '#ec4899', flexDirection: 'column'}]}><Text style={[styles.planningTitle, {color: '#ec4899'}]}>{item.title}</Text><Text style={{fontSize: 13, color: '#475569', marginTop: 10}}>{item.content}</Text></View>))}
+               {announcements.length === 0 ? (
+                 <Text style={styles.emptyText}>Aucune annonce publiée.</Text>
+               ) : announcements.map(item => (
+                 <View key={item.id} style={[styles.planningCard, { borderLeftWidth: 4, borderLeftColor: '#ec4899' }]}>
+                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                     <View style={{ flex: 1, paddingRight: 8 }}>
+                       <Text style={[styles.planningTitle, { color: '#ec4899' }]}>{item.title}</Text>
+                       <Text style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>🗓 {new Date(item.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</Text>
+                       <Text style={{ fontSize: 13, color: '#475569', marginTop: 8 }}>{item.content}</Text>
+                     </View>
+                     {isLeader && (
+                       <View style={{ flexDirection: 'row', gap: 6 }}>
+                         <TouchableOpacity
+                           style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#e0f2fe', alignItems: 'center', justifyContent: 'center' }}
+                           onPress={() => startEditAnnouncement(item)}
+                         >
+                           <Text style={{ fontSize: 14 }}>✏️</Text>
+                         </TouchableOpacity>
+                         <TouchableOpacity
+                           style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}
+                           onPress={() => handleDeleteAnnouncement(item)}
+                         >
+                           <Text style={{ fontSize: 14 }}>🗑</Text>
+                         </TouchableOpacity>
+                       </View>
+                     )}
+                   </View>
+                 </View>
+               ))}
              </ScrollView>
           )}
 
@@ -770,12 +1204,13 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       {/* --- MODALES --- */}
 
       {/* 🔴 MODALE DE GESTION DES MEMBRES (Mise à jour pour assigner les groupes) */}
-      <Modal visible={!!selectedMember && currentView === 'MEMBERS' && hasSubGroups} transparent animationType="fade">
+      <Modal visible={!!selectedMember && currentView === 'MEMBERS'} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Gestion : {selectedMember?.member?.full_name}</Text>
             <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.6, width: '100%' }} showsVerticalScrollIndicator={false}>
               
+              {hasSubGroups && (<>
               <Text style={[styles.sectionTitle, {alignSelf: 'flex-start', marginLeft: 10}]}>Appartient au sous-groupe :</Text>
               <TouchableOpacity style={[styles.modalOption, !selectedMember?.sub_group_id && {borderColor: '#3b82f6', backgroundColor: '#eff6ff'}]} onPress={async () => {
                 await supabase.from('department_members').update({ sub_group_id: null }).eq('id', selectedMember.id);
@@ -794,7 +1229,9 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                   </TouchableOpacity>
                 );
               })}
+              </>)}
 
+              {hasSubGroups && (<>
               <Text style={[styles.sectionTitle, {alignSelf: 'flex-start', marginLeft: 10, marginTop: 15}]}>Responsabilité (Direction) :</Text>
               <TouchableOpacity style={styles.modalOption} onPress={async () => { 
                 await supabase.from('department_groups').update({ leader_id: null }).eq('leader_id', selectedMember.user_id); 
@@ -813,6 +1250,27 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                   </TouchableOpacity>
                 ); 
               })}
+              </>)}
+
+              {/* 🔴 Section "Adjoint du département" — permet au responsable de nommer/révoquer un adjoint depuis le mobile */}
+              <Text style={[styles.sectionTitle, {alignSelf: 'flex-start', marginLeft: 10, marginTop: 15}]}>Adjoint du département :</Text>
+              {memberIsDeputy ? (
+                <TouchableOpacity
+                  style={[styles.modalOption, { borderColor: '#10b981', backgroundColor: '#ecfdf5' }]}
+                  onPress={() => handleRevokeDeputy(selectedMember.user_id, selectedMember.member.full_name)}
+                >
+                  <Text style={{ color: '#10b981', fontWeight: 'bold' }}>✅ {selectedMember.member.full_name} est déjà adjoint(e)</Text>
+                  <Text style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>Toucher pour révoquer ce rôle d'adjoint</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.modalOption}
+                  onPress={() => handleAppointAsDeputy(selectedMember.user_id, selectedMember.member.full_name)}
+                >
+                  <Text style={{ color: '#0f172a', fontWeight: 'bold' }}>👥 Nommer comme adjoint(e) du département</Text>
+                  <Text style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>Il/Elle aura accès au dashboard et pourra gérer les annonces et plannings.</Text>
+                </TouchableOpacity>
+              )}
             </ScrollView>
             <TouchableOpacity style={styles.modalCancel} onPress={() => setSelectedMember(null)}><Text style={styles.modalCancelText}>Annuler</Text></TouchableOpacity>
           </View>
@@ -996,8 +1454,8 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalContentBottom, {maxHeight: '85%'}]}>
             <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Nouvelle Annonce</Text>
-              <TouchableOpacity onPress={() => setIsAddingAnnouncement(false)}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity>
+              <Text style={styles.modalTitle}>{editingAnnouncement ? "Modifier l'annonce" : 'Nouvelle Annonce'}</Text>
+              <TouchableOpacity onPress={() => { setIsAddingAnnouncement(false); setEditingAnnouncement(null); }}><Text style={{fontSize: 24, color: '#64748b'}}>✕</Text></TouchableOpacity>
             </View>
             <ScrollView>
               <Text style={styles.inputLabel}>Titre *</Text>
@@ -1043,10 +1501,10 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
               )}
 
               <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
-                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingAnnouncement(false)}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => { setIsAddingAnnouncement(false); setEditingAnnouncement(null); }}>
                   <Text style={styles.modalBtnCancelText}>Annuler</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAddAnnouncement}>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={editingAnnouncement ? handleEditAnnouncement : handleAddAnnouncement}>
                   <Text style={styles.modalBtnSubmitText}>Publier</Text>
                 </TouchableOpacity>
               </View>
@@ -1060,8 +1518,8 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.modalContentBottom, {maxHeight: '85%'}]}>
             <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Nouveau Planning</Text>
-              <TouchableOpacity onPress={() => { setIsAddingPlanning(false); }}>
+              <Text style={styles.modalTitle}>{editingPlanning ? 'Modifier le Planning' : 'Nouveau Planning'}</Text>
+              <TouchableOpacity onPress={() => { setIsAddingPlanning(false); setEditingPlanning(null); }}>
                 <Text style={{fontSize: 24, color: '#64748b'}}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -1142,10 +1600,10 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
               )}
 
               <View style={[styles.modalActionsRow, {marginBottom: 30}]}>
-                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAddingPlanning(false)}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => { setIsAddingPlanning(false); setEditingPlanning(null); }}>
                   <Text style={styles.modalBtnCancelText}>Annuler</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.modalBtnSubmit} onPress={() => handleAddPlanning(false)}>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={editingPlanning ? handleEditPlanning : () => handleAddPlanning(false)}>
                   <Text style={styles.modalBtnSubmitText}>Créer</Text>
                 </TouchableOpacity>
               </View>
@@ -1413,6 +1871,12 @@ const styles = StyleSheet.create({
   memberRole: { fontSize: 12, color: '#64748b', marginTop: 4, fontStyle: 'italic' },
   memberExcludeBtn: { backgroundColor: '#fef2f2', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: '#fecaca' },
   memberExcludeBtnText: { color: '#ef4444', fontWeight: 'bold', fontSize: 12 },
+  // 🔴 Badge "Adjoint" affiché à côté du nom du membre
+  deputyBadge: { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, marginLeft: 8 },
+  deputyBadgeText: { color: '#92400e', fontSize: 11, fontWeight: 'bold' },
+  // 🔴 Bouton "Promouvoir" pleine-largeur sur la carte membre
+  promoteCardBtn: { backgroundColor: '#3b82f6', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, marginTop: 10, alignItems: 'center', justifyContent: 'center' },
+  promoteCardBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
   assignBtn: { paddingVertical: 8, borderRadius: 8, marginTop: 5 },
   emptyText: { textAlign: 'center', marginTop: 40, color: '#94a3b8', fontStyle: 'italic' },
   

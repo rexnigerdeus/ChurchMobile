@@ -22,8 +22,16 @@ export default function HomeScreen({
   useEffect(() => {
     async function initUser() {
       const { data: { user } } = await supabase.auth.getUser();
-      const { data: roleData } = await supabase.from('user_roles').select('role').eq('user_id', user?.id).single();
-      if (roleData) setMyRole(roleData.role);
+      // 🔴 Récupérer TOUS les rôles de l'utilisateur (un adjoint a souvent
+      //    plusieurs lignes user_roles, .single() échouerait silencieusement).
+      const { data: allRoles } = await supabase.from('user_roles').select('role').eq('user_id', user?.id);
+      if (allRoles && allRoles.length > 0) {
+        // Priorité : CHURCH_LEADER > ASSISTANT_PASTOR > SECRETARY >
+        // FINANCE_MANAGER > DEPARTMENT_LEADER
+        const priority = ['CHURCH_LEADER', 'ASSISTANT_PASTOR', 'SECRETARY', 'FINANCE_MANAGER', 'DEPARTMENT_LEADER'];
+        const topRole = priority.find(r => allRoles.some(ar => ar.role === r));
+        if (topRole) setMyRole(topRole);
+      }
 
       let fetchedName = '';
       const { data: crm } = await supabase.from('church_members').select('full_name').eq('user_id', user?.id).single();
@@ -48,9 +56,21 @@ export default function HomeScreen({
     useEffect(() => {
       async function loadFeed() {
         const { data: { user } } = await supabase.auth.getUser();
-        const { data: role } = await supabase.from('user_roles').select('entity_id').eq('user_id', user?.id).single();
-        const { data: crm } = await supabase.from('church_members').select('church_id').eq('user_id', user?.id).single();
-        const churchId = role?.entity_id || crm?.church_id;
+        // 🔴 Pour un DEPARTMENT_LEADER, user_roles.entity_id pointe vers
+        //    le département, pas vers l'église. On utilise donc
+        //    church_members.church_id comme source fiable du churchId,
+        //    avec un fallback via church_departments si pas de fiche.
+        const { data: crm } = await supabase.from('church_members').select('church_id').eq('user_id', user?.id).maybeSingle();
+        let churchId = crm?.church_id;
+
+        if (!churchId) {
+          const { data: myDeptRoles } = await supabase.from('user_roles').select('entity_id, department_id').eq('user_id', user?.id).eq('role', 'DEPARTMENT_LEADER');
+          const deptIds = (myDeptRoles || []).map(r => r.department_id || r.entity_id).filter(Boolean);
+          if (deptIds.length > 0) {
+            const { data: dept } = await supabase.from('church_departments').select('church_id').in('id', deptIds).maybeSingle();
+            churchId = dept?.church_id;
+          }
+        }
 
         if (churchId) {
           // Annonces récentes uniquement (publiées il y a moins de 30 jours).
@@ -169,31 +189,50 @@ export default function HomeScreen({
 
     async function loadDepts() {
       const { data: { user } } = await supabase.auth.getUser();
-      const { data: role } = await supabase.from('user_roles').select('entity_id').eq('user_id', user?.id).single();
-      const { data: crm } = await supabase.from('church_members').select('church_id').eq('user_id', user?.id).single();
-      const churchId = role?.entity_id || crm?.church_id;
+// 🔴 Pour trouver l'église de l'utilisateur, on ne peut PAS
+        //    utiliser user_roles.entity_id car pour un DEPARTMENT_LEADER
+        //    cette colonne pointe vers le département, pas vers l'église.
+        //    On utilise donc church_members.church_id comme source primaire,
+        //    avec un fallback via church_departments.church_id si le membre
+        //    n'a pas de fiche church_members.
+        const { data: crm } = await supabase.from('church_members').select('church_id').eq('user_id', user?.id).maybeSingle();
+        let churchId = crm?.church_id;
+
+        // Fallback : si pas de church_members, on cherche via les
+        // départements où l'utilisateur est DEPARTMENT_LEADER.
+        if (!churchId) {
+          const { data: myDeptRoles } = await supabase.from('user_roles').select('entity_id, department_id').eq('user_id', user?.id).eq('role', 'DEPARTMENT_LEADER');
+          const deptIds = (myDeptRoles || []).map(r => r.department_id || r.entity_id).filter(Boolean);
+          if (deptIds.length > 0) {
+            const { data: dept } = await supabase.from('church_departments').select('church_id').in('id', deptIds).maybeSingle();
+            churchId = dept?.church_id;
+          }
+        }
 
       if (churchId) {
         const { data: depts } = await supabase.from('church_departments').select('*').eq('church_id', churchId);
-        setDepartments(depts || []);
+          setDepartments(depts || []);
 
-        const { data: reqs } = await supabase.from('department_members').select('*').eq('user_id', user?.id);
-        const allRequests = reqs || [];
-        setMyRequests(allRequests);
+          const { data: reqs } = await supabase.from('department_members').select('*').eq('user_id', user?.id);
+          const allRequests = reqs || [];
+          setMyRequests(allRequests);
 
-        // 1. Groupes du membre
-        const { data: myGroups } = await supabase.from('department_groups').select('*').eq('leader_id', user?.id);
-        setLedGroups(myGroups || []);
+          // 1. Groupes du membre
+          const { data: myGroups } = await supabase.from('department_groups').select('*').eq('leader_id', user?.id);
+          setLedGroups(myGroups || []);
 
-        const approvedSubGroupIds = allRequests.filter(r => r.status === 'APPROVED' && r.sub_group_id).map(r => r.sub_group_id);
-        if (approvedSubGroupIds.length > 0) {
-          const { data: memGroups } = await supabase.from('department_groups').select('*').in('id', approvedSubGroupIds);
-          setMemberGroups((memGroups || []).filter(g => g.leader_id !== user?.id));
-        }
+          const approvedSubGroupIds = allRequests.filter(r => r.status === 'APPROVED' && r.sub_group_id).map(r => r.sub_group_id);
+          if (approvedSubGroupIds.length > 0) {
+            const { data: memGroups } = await supabase.from('department_groups').select('*').in('id', approvedSubGroupIds);
+            setMemberGroups((memGroups || []).filter(g => g.leader_id !== user?.id));
+          }
 
-        // 2. Départements du membre
-        const { data: myDeptRoles } = await supabase.from('user_roles').select('*').eq('user_id', user?.id).eq('role', 'DEPARTMENT_LEADER');
-        const ledDeptIds = (myDeptRoles || []).map(r => r.department_id);
+          // 2. Départements du membre
+          //    🔴 Un DEPARTMENT_LEADER peut avoir son département stocké
+          //    soit dans entity_id, soit dans department_id (les deux
+          //    conventions coexistent). On récupère les deux.
+          const { data: myDeptRoles } = await supabase.from('user_roles').select('*').eq('user_id', user?.id).eq('role', 'DEPARTMENT_LEADER');
+          const ledDeptIds = (myDeptRoles || []).map(r => r.department_id || r.entity_id).filter(Boolean);
         setLedDepts(ledDeptIds);
 
         const approvedDeptIds = allRequests.filter(r => r.status === 'APPROVED' && !ledDeptIds.includes(r.department_id)).map(r => r.department_id);
