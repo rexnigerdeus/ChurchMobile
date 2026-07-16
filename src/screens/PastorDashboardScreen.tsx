@@ -11,6 +11,11 @@ import DateTimePicker from '../components/WebDatePicker';
 
 import EvangelismModule from '../components/departments/EvangelismModule';
 import HeadcountModule from '../components/departments/HeadcountModule';
+import PrayerModule from '../components/departments/PrayerModule';
+import StudentsModule from '../components/departments/StudentsModule';
+import FamilyModule from '../components/departments/FamilyModule';
+import BusinessModule from '../components/departments/BusinessModule';
+import ActivitiesModule from '../components/departments/ActivitiesModule';
 
 const { width } = Dimensions.get('window');
 const DAYS_OF_WEEK = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
@@ -22,6 +27,7 @@ type ViewState =
   | 'DEPTS_LIST' | 'DEPT_HUB' | 'DEPT_PENDING' | 'DEPT_MEMBERS' | 'DEPT_SOULS' | 'DEPT_HEADCOUNTS'
   | 'DEPT_FINANCES' | 'DEPT_PROJECTS' | 'DEPT_EQUIPMENTS' | 'DEPT_PLANNING' | 'DEPT_ANNOUNCEMENTS'
   | 'DEPT_SONGS' | 'DEPT_CHILDREN'
+  | 'DEPT_PRAYERS' | 'DEPT_STUDENTS' | 'DEPT_FAMILIES' | 'DEPT_BUSINESS' | 'DEPT_ACTIVITIES' | 'DEPT_SUBGROUPS'
   | 'DEMOGRAPHY';
 
 type BureauTab = 'ANNOUNCEMENTS' | 'PROGRAMS';
@@ -102,8 +108,10 @@ export default function PastorDashboardScreen({ onBack }: { onBack: () => void }
   
   // Détection du type de département
   const [deptType, setDeptType] = useState<{
-    isChoir: boolean; isChildren: boolean; isEvangelism: boolean; isMedia: boolean; isUsher: boolean; hasSubGroups: boolean;
-  }>({ isChoir: false, isChildren: false, isEvangelism: false, isMedia: false, isUsher: false, hasSubGroups: false });
+    isChoir: boolean; isChildren: boolean; isEvangelism: boolean; isMedia: boolean; isUsher: boolean;
+    isPrayer: boolean; isStudents: boolean; isFamily: boolean; isBusiness: boolean; isActivity: boolean; isYouth: boolean;
+    hasSubGroups: boolean;
+  }>({ isChoir: false, isChildren: false, isEvangelism: false, isMedia: false, isUsher: false, isPrayer: false, isStudents: false, isFamily: false, isBusiness: false, isActivity: false, isYouth: false, hasSubGroups: false });
 
   // Sub-tabs
   const [bureauTab, setBureauTab] = useState<BureauTab>('ANNOUNCEMENTS');
@@ -348,9 +356,16 @@ async function getChurchIdRaw(): Promise<string | null> {
       const isEvang = !!deptName.match(/évangélisation|evangelisation|gagnants|âmes|mission/);
       const isMedia = !!deptName.match(/multimédia|multimedia|technique|sonorisation|communication|media/);
       const isUsher = !!deptName.match(/ordre|accueil|protocole|huissier/);
+      const isPrayer = !!deptName.match(/intercession|prière|prayer|veille/);
+      const isStudents = !!deptName.match(/élèves|étudiants|insertion|scolaire|étudiant/);
+      const isFamily = !!deptName.match(/famille|foyer|conjugal|ménage/);
+      const isBusiness = !!deptName.match(/affaires|business|entrepreneuriat|professionnel/);
+      const isYouth = !!deptName.match(/jeunesse|jeune|youth/);
+      const isActivity = !isBusiness && !!deptName.match(/femmes|hommes|women|men/);
       setDeptType({
         isChoir, isChildren: isChild, isEvangelism: isEvang, isMedia, isUsher,
-        hasSubGroups: isChoir || isUsher
+        isPrayer, isStudents, isFamily, isBusiness, isActivity, isYouth,
+        hasSubGroups: isChoir || isUsher || isYouth
       });
 
       // 🔴 CORRECTIF : si le département n'a pas d'instance church_departments pour cette église,
@@ -1507,12 +1522,86 @@ async function getChurchIdRaw(): Promise<string | null> {
           {deptType.isChildren && (
             <MenuButton icon="🧸" title="Enfants" subtitle={`${deptChildren.length} inscrits`} onPress={() => setCurrentView('DEPT_CHILDREN')} />
           )}
+          {deptType.isPrayer && (
+            <MenuButton icon="🙏" title="Requêtes de Prière" subtitle="Intercession" onPress={() => setCurrentView('DEPT_PRAYERS')} />
+          )}
+          {deptType.isStudents && (
+            <MenuButton icon="🎓" title="Étudiants" subtitle="Suivi & Insertion" onPress={() => setCurrentView('DEPT_STUDENTS')} />
+          )}
+          {deptType.isFamily && (
+            <MenuButton icon="👨‍👩‍👧‍👦" title="Familles" subtitle="Suivi des foyers" onPress={() => setCurrentView('DEPT_FAMILIES')} />
+          )}
+          {deptType.isBusiness && (
+            <MenuButton icon="💼" title="Réseau Pro" subtitle="Hommes d'affaires" onPress={() => setCurrentView('DEPT_BUSINESS')} />
+          )}
+          {deptType.isActivity && (
+            <MenuButton icon="🤝" title="Rencontres" subtitle="Activités" onPress={() => setCurrentView('DEPT_ACTIVITIES')} />
+          )}
+          {deptType.isYouth && (
+            <>
+              <MenuButton icon="👥" title="Sous-groupes" subtitle={`${deptGroups.length} groupes`} onPress={() => setCurrentView('DEPT_SUBGROUPS')} />
+              <MenuButton icon="🤝" title="Rencontres" subtitle="Activités" onPress={() => setCurrentView('DEPT_ACTIVITIES')} />
+            </>
+          )}
           <MenuButton icon="💰" title="Finances" subtitle="Trésorerie" onPress={() => setCurrentView('DEPT_FINANCES')} />
           <MenuButton icon="📅" title="Planning" subtitle={`${deptPlannings.length} événements`} onPress={() => setCurrentView('DEPT_PLANNING')} />
           <MenuButton icon="📢" title="Annonces" subtitle={`${deptAnnouncements.length} publiées`} onPress={() => setCurrentView('DEPT_ANNOUNCEMENTS')} />
         </View>
       </ScrollView>
     );
+  };
+
+  // 🔴 SOUS-GROUPES DU DÉPARTEMENT (Jeunesse — vue pasteur avec effectifs et responsables)
+  const renderDeptSubGroups = () => {
+    if (!selectedDept?.id) return null;
+    return (
+      <FlatList
+        data={deptGroups}
+        keyExtractor={i => i.id}
+        ListHeaderComponent={
+          <View style={{ paddingHorizontal: 20, marginBottom: 15 }}>
+            <Text style={styles.sectionTitle}>Sous-groupes & Effectifs</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+              {deptGroups.length} sous-groupe{deptGroups.length > 1 ? 's' : ''} • {deptMembers.length} membre{deptMembers.length > 1 ? 's' : ''} au total
+            </Text>
+          </View>
+        }
+        ListEmptyComponent={<View style={styles.emptyBox}><Text style={styles.emptyText}>Aucun sous-groupe créé pour ce département.</Text></View>}
+        renderItem={({ item }) => {
+          const groupMembers = deptMembers.filter((m: any) => m.sub_group_id === item.id);
+          const leader = deptMembers.find((m: any) => m.user_id === item.leader_id);
+          return (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{item.name}</Text>
+              <Text style={styles.cardSub}>👥 {groupMembers.length} membre{groupMembers.length > 1 ? 's' : ''}</Text>
+              {leader && <Text style={[styles.cardSub, { color: '#10b981', fontWeight: 'bold' }]}>👑 {leader.member?.full_name || 'N/A'}</Text>}
+              {!leader && <Text style={[styles.cardSub, { color: '#94a3b8', fontStyle: 'italic' }]}>Aucun responsable désigné</Text>}
+            </View>
+          );
+        }}
+      />
+    );
+  };
+
+  // 🔴 RENDU GÉNÉRIQUE POUR LES NOUVEAUX MODULES (Prayer, Students, Family, Business, Activities)
+  //    Le pasteur a accès en lecture/écriture (isLeader = true) sur tous les départements.
+  const renderDeptGenericModule = (moduleName: string) => {
+    if (!selectedDept?.id) return null;
+    const isLeader = true; // Le pasteur a toujours les droits leader
+    switch (moduleName) {
+      case 'PrayerModule':
+        return <PrayerModule deptId={selectedDept.id} isLeader={isLeader} activeMembers={deptMembers} />;
+      case 'StudentsModule':
+        return <StudentsModule deptId={selectedDept.id} isLeader={isLeader} />;
+      case 'FamilyModule':
+        return <FamilyModule deptId={selectedDept.id} isLeader={isLeader} />;
+      case 'BusinessModule':
+        return <BusinessModule deptId={selectedDept.id} isLeader={isLeader} />;
+      case 'ActivitiesModule':
+        return <ActivitiesModule deptId={selectedDept.id} isLeader={isLeader} deptName={selectedDept?.custom_name || selectedDept?.name || ''} />;
+      default:
+        return null;
+    }
   };
 
   // 🔴 CANDIDATS DU DÉPARTEMENT
@@ -2068,6 +2157,12 @@ async function getChurchIdRaw(): Promise<string | null> {
           {currentView === 'DEPT_ANNOUNCEMENTS' && renderDeptAnnouncements()}
           {currentView === 'DEPT_SONGS' && renderDeptSongs()}
           {currentView === 'DEPT_CHILDREN' && renderDeptChildren()}
+          {currentView === 'DEPT_PRAYERS' && renderDeptGenericModule('PrayerModule')}
+          {currentView === 'DEPT_STUDENTS' && renderDeptGenericModule('StudentsModule')}
+          {currentView === 'DEPT_FAMILIES' && renderDeptGenericModule('FamilyModule')}
+          {currentView === 'DEPT_BUSINESS' && renderDeptGenericModule('BusinessModule')}
+          {currentView === 'DEPT_ACTIVITIES' && renderDeptGenericModule('ActivitiesModule')}
+          {currentView === 'DEPT_SUBGROUPS' && renderDeptSubGroups()}}
         </View>
       )}
 

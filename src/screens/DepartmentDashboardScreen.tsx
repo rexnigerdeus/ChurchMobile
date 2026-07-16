@@ -12,10 +12,15 @@ import DateTimePicker from '../components/WebDatePicker';
 import EvangelismModule from '../components/departments/EvangelismModule';
 import FinanceModule from '../components/departments/FinanceModule';
 import HeadcountModule from '../components/departments/HeadcountModule';
+import PrayerModule from '../components/departments/PrayerModule';
+import StudentsModule from '../components/departments/StudentsModule';
+import FamilyModule from '../components/departments/FamilyModule';
+import BusinessModule from '../components/departments/BusinessModule';
+import ActivitiesModule from '../components/departments/ActivitiesModule';
 
 const { width } = Dimensions.get('window');
 
-type ViewState = 'HUB' | 'PENDING' | 'MEMBERS' | 'SONGS' | 'FINANCES' | 'PLANNING' | 'ANNOUNCEMENTS' | 'CHILDREN' | 'SOULS' | 'PROJECTS' | 'EQUIPMENTS' | 'HEADCOUNTS';
+type ViewState = 'HUB' | 'PENDING' | 'MEMBERS' | 'SONGS' | 'FINANCES' | 'PLANNING' | 'ANNOUNCEMENTS' | 'CHILDREN' | 'SOULS' | 'PROJECTS' | 'EQUIPMENTS' | 'HEADCOUNTS' | 'PRAYERS' | 'STUDENTS' | 'FAMILIES' | 'BUSINESS' | 'ACTIVITIES' | 'SUBGROUPS';
 
 export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: string, onBack: () => void }) {
   const [currentView, setCurrentView] = useState<ViewState>('HUB');
@@ -28,6 +33,12 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [isEvangelismDept, setIsEvangelismDept] = useState(false);
   const [isMediaDept, setIsMediaDept] = useState(false);
   const [isUsherDept, setIsUsherDept] = useState(false);
+  const [isPrayerDept, setIsPrayerDept] = useState(false);
+  const [isStudentsDept, setIsStudentsDept] = useState(false);
+  const [isFamilyDept, setIsFamilyDept] = useState(false);
+  const [isBusinessDept, setIsBusinessDept] = useState(false);
+  const [isActivityDept, setIsActivityDept] = useState(false);
+  const [isYouthDept, setIsYouthDept] = useState(false);
   const [hasSubGroups, setHasSubGroups] = useState(false);
   
   const [deptInfo, setDeptInfo] = useState<any>(null);
@@ -134,16 +145,30 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   // 🚀 OPTIMISATION : Requêtes parallèles massives pour un chargement instantané
   async function loadInitialData(showSpinner = true) {
     if (showSpinner) setLoading(true);
+    // 🔴 Réinitialiser tous les flags de type de département pour éviter
+    //    qu'un département précédent (ex: Louange) laisse des cartes visibles
+    //    (ex: "Répertoire") pendant le chargement du nouveau département.
+    setIsChoirDept(false); setIsChildrenDept(false); setIsEvangelismDept(false);
+    setIsMediaDept(false); setIsUsherDept(false); setIsPrayerDept(false);
+    setIsStudentsDept(false); setIsFamilyDept(false); setIsBusinessDept(false);
+    setIsActivityDept(false); setIsYouthDept(false); setHasSubGroups(false);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       setCurrentUserId(user?.id || null);
       
-      const { data: dept } = await supabase.from('church_departments').select('*').eq('id', deptId).single();
+      const { data: dept } = await supabase.from('church_departments')
+        .select('*, community_departments(global_departments(default_name))')
+        .eq('id', deptId).single();
       
       let isChoir = false; let isChild = false; let isEvang = false; let isMedia = false; let isUsher = false;
 
       if (dept) {
-        const dName = dept.custom_name || dept.name;
+        // 🔴 Récupérer le default_name via la jointure community_departments → global_departments
+        //    car church_departments n'a pas de colonne "name", seulement "custom_name".
+        //    Sans cette jointure, un département sans custom_name affichait "undefined"
+        //    et la détection par regex échouait.
+        const defaultName = (dept as any)?.community_departments?.global_departments?.default_name;
+        const dName = dept.custom_name || defaultName || 'Département';
         setDeptInfo({ id: dept.id, name: dName, church_id: dept.church_id });
         const lowered = dName.toLowerCase();
         isChoir = !!lowered.match(/chorale|louange|mystic/);
@@ -151,9 +176,17 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         isEvang = !!lowered.match(/évangélisation|evangelisation|gagnants|âmes|mission/);
         isMedia = !!lowered.match(/multimédia|multimedia|technique|sonorisation|communication|media/);
         isUsher = !!lowered.match(/ordre|accueil|protocole|huissier/);
+        const isPrayer = !!lowered.match(/intercession|prière|prayer|veille/);
+        const isStudents = !!lowered.match(/élèves|étudiants|insertion|scolaire|étudiant/);
+        const isFamily = !!lowered.match(/famille|foyer|conjugal|ménage/);
+        const isBusiness = !!lowered.match(/affaires|business|entrepreneuriat|professionnel/);
+        const isYouth = !!lowered.match(/jeunesse|jeune|youth/);
+        // isActivity = Femmes ou Hommes, mais PAS "Hommes d'affaires" (déjà capté par isBusiness)
+        const isActivity = !isBusiness && !!lowered.match(/femmes|hommes|women|men/);
         
         setIsChoirDept(isChoir); setIsChildrenDept(isChild); setIsEvangelismDept(isEvang); setIsMediaDept(isMedia); setIsUsherDept(isUsher);
-        setHasSubGroups(isChoir || isUsher);
+        setIsPrayerDept(isPrayer); setIsStudentsDept(isStudents); setIsFamilyDept(isFamily); setIsBusinessDept(isBusiness); setIsActivityDept(isActivity); setIsYouthDept(isYouth);
+        setHasSubGroups(isChoir || isUsher || isYouth);
 
         // 🔴 Récupération du total des fidèles pour les analytiques
         if (dept.church_id) {
@@ -250,9 +283,13 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
 
       // Parallélisation des modules spécifiques
       const modulePromises: Promise<any>[] = [];
-      if (isMedia) {
+      // 🔴 Charger les rôles de planning pour TOUS les départements (pas seulement multimédia)
+      //    car les rôles de régie peuvent être assignés sur n'importe quel planning lié à un programme
+      {
         const planIds = formattedPlannings.map((p: any) => p.id);
         modulePromises.push(planIds.length > 0 ? supabase.from('department_planning_roles').select('*').in('planning_id', planIds).then(r=>({k:'pRoles', d:r.data})) : Promise.resolve({k:'pRoles', d:[]}));
+      }
+      if (isMedia) {
         modulePromises.push(supabase.from('department_projects').select('*').eq('department_id', deptId).order('created_at', { ascending: false }).then(r=>({k:'projs', d:r.data})));
         modulePromises.push(supabase.from('department_equipments').select('*').eq('department_id', deptId).then(r=>({k:'eqs', d:r.data})));
         modulePromises.push(supabase.from('department_equipment_needs').select('*').eq('department_id', deptId).then(r=>({k:'eqNeeds', d:r.data})));
@@ -287,7 +324,15 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       setFinances(rawFinancesRes.data?.map((fin: any) => ({ ...fin, member: fin.member_id ? { full_name: activeMembs.find(p => p.user_id === fin.member_id)?.member.full_name || 'Inconnu' } : null })) || []);
       
       if (dept?.church_id) {
-          const sortedPrograms = (cProgramsRes.data || []).sort((a: any, b: any) => new Date(a.date || a.start_time || a.created_at).getTime() - new Date(b.date || b.start_time || b.created_at).getTime());
+          // 🔴 Ne garder que les programmes à venir du mois en cours, triés par start_at croissant
+          const now = new Date();
+          now.setHours(0, 0, 0, 0);
+          const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+          const upcomingPrograms = (cProgramsRes.data || []).filter((cp: any) => {
+            const progDate = new Date(cp.start_at || cp.date || cp.start_time || cp.created_at);
+            return progDate >= now && progDate <= endOfMonth;
+          });
+          const sortedPrograms = upcomingPrograms.sort((a: any, b: any) => new Date(a.start_at || a.date || a.start_time || a.created_at).getTime() - new Date(b.start_at || b.date || b.start_time || b.created_at).getTime());
           setAllChurchPrograms(sortedPrograms); 
           setChurchPrograms(sortedPrograms.filter((cp: any) => !formattedPlannings.some((dp: any) => dp.church_program_id === cp.id))); 
       }
@@ -324,6 +369,45 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     setNewGroupName(''); 
     if(error) Alert.alert("Erreur", error.message); 
     else { loadInitialData(false); } 
+  };
+
+  // 🔴 Renommer un sous-groupe
+  const handleRenameGroup = (group: any) => {
+    Alert.prompt(
+      'Renommer le sous-groupe',
+      `Nom actuel : ${group.name}`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Renommer', onPress: async (newName: string) => {
+          if (!newName?.trim() || newName.trim() === group.name) return;
+          const { error } = await supabase.from('department_groups').update({ name: newName.trim() }).eq('id', group.id);
+          if (error) Alert.alert('Erreur', error.message);
+          else loadInitialData(false);
+        }},
+      ],
+      'plain-text',
+      group.name
+    );
+  };
+
+  // 🔴 Supprimer un sous-groupe (avec confirmation)
+  const handleDeleteGroup = (group: any) => {
+    const memberCount = activeMembers.filter(m => m.sub_group_id === group.id).length;
+    Alert.alert(
+      'Supprimer le sous-groupe',
+      `Voulez-vous vraiment supprimer « ${group.name} » ?${memberCount > 0 ? `\n\n⚠️ ${memberCount} membre(s) y sont rattachés et seront détachés.` : ''}`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Supprimer', style: 'destructive', onPress: async () => {
+          // Détacher les membres du groupe
+          await supabase.from('department_members').update({ sub_group_id: null }).eq('sub_group_id', group.id);
+          // Supprimer le groupe
+          const { error } = await supabase.from('department_groups').delete().eq('id', group.id);
+          if (error) Alert.alert('Erreur', error.message);
+          else loadInitialData(false);
+        }},
+      ]
+    );
   };
 
   // 🔴 Nommer un membre comme adjoint du département (DEPARTMENT_LEADER)
@@ -629,27 +713,29 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
     });
     setIsAddingAnnouncement(true);
   };
-  const handleAddPlanning = async (isJoiningChurchProgram: boolean = false, autoChurchProg?: any) => {
-    if (!isJoiningChurchProgram && (!newPlanning.title.trim() || !newPlanning.date || !newPlanning.time)) return Alert.alert("Erreur", "Requis.");
+  const handleAddPlanning = async (isJoiningChurchProgram: boolean = false, autoChurchProg?: any): Promise<string | null> => {
+    if (!isJoiningChurchProgram && (!newPlanning.title.trim() || !newPlanning.date || !newPlanning.time)) return Alert.alert("Erreur", "Requis.") as any;
     const { data: { user } } = await supabase.auth.getUser();
     let eventDateIso = new Date().toISOString(); let eventTitle = newPlanning.title.trim(); let churchProgramId = null;
     const programToJoin = autoChurchProg || selectedChurchProgram;
 
     if (isJoiningChurchProgram && programToJoin) {
-      eventTitle = programToJoin.title; eventDateIso = programToJoin.date || programToJoin.start_time || programToJoin.created_at; churchProgramId = programToJoin.id;
+      eventTitle = programToJoin.title; eventDateIso = programToJoin.start_at || programToJoin.date || programToJoin.start_time || programToJoin.created_at; churchProgramId = programToJoin.id;
     } else {
       const dateObjParsed = new Date(`${newPlanning.date}T${newPlanning.time}:00`);
-      if (isNaN(dateObjParsed.getTime())) return Alert.alert("Erreur", "Date invalide.");
+      if (isNaN(dateObjParsed.getTime())) return Alert.alert("Erreur", "Date invalide.") as any;
       eventDateIso = dateObjParsed.toISOString();
     }
     const concernsAll = hasSubGroups ? newPlanning.concerns_all : true;
     const { data: planData, error: planError } = await supabase.from('department_plannings').insert({ department_id: deptId, title: eventTitle, event_date: eventDateIso, description: newPlanning.description.trim() || null, is_church_event: isJoiningChurchProgram ? true : newPlanning.is_church_event, church_program_id: churchProgramId, concerns_all: concernsAll, created_by: user?.id }).select().single();
-    if (planError) return Alert.alert('Erreur', planError.message);
+    if (planError) { Alert.alert('Erreur', planError.message); return null; }
     if (planData && !concernsAll && newPlanning.selected_groups.length > 0) {
       const inserts = newPlanning.selected_groups.map(gId => ({ planning_id: planData.id, group_id: gId }));
       await supabase.from('department_planning_groups').insert(inserts);
     }
-    setIsAddingPlanning(false); setEditingPlanning(null); setSelectedChurchProgram(null); setNewPlanning({ title: '', date: '', time: '', description: '', is_church_event: false, concerns_all: true, selected_groups: [] }); loadInitialData(false);
+    setIsAddingPlanning(false); setEditingPlanning(null); setSelectedChurchProgram(null); setNewPlanning({ title: '', date: '', time: '', description: '', is_church_event: false, concerns_all: true, selected_groups: [] });
+    await loadInitialData(false);
+    return planData?.id || null;
   };
 
   // 🔴 Modification d'un planning (responsable / adjoint autorisé)
@@ -818,6 +904,60 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
           <View style={styles.row}>
             <HubCard title="Nouvelles Âmes" count={soulsList.length} icon="🕊️" color="#f97316" onPress={() => setCurrentView('SOULS')} />
             <View style={{ flex: 1 }} />
+          </View>
+        </>
+      )}
+      {isPrayerDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Intercession & Prière</Text>
+          <View style={styles.row}>
+            <HubCard title="Requêtes de Prière" count={soulsList.length} icon="🙏" color="#6366f1" onPress={() => setCurrentView('PRAYERS')} />
+            <View style={{ flex: 1 }} />
+          </View>
+        </>
+      )}
+      {isStudentsDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Suivi Scolaire & Insertion</Text>
+          <View style={styles.row}>
+            <HubCard title="Étudiants & Jeunes Pros" count={soulsList.length} icon="🎓" color="#0ea5e9" onPress={() => setCurrentView('STUDENTS')} />
+            <View style={{ flex: 1 }} />
+          </View>
+        </>
+      )}
+      {isFamilyDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Suivi des Familles</Text>
+          <View style={styles.row}>
+            <HubCard title="Registre des Familles" count={soulsList.length} icon="👨‍👩‍👧‍👦" color="#ec4899" onPress={() => setCurrentView('FAMILIES')} />
+            <View style={{ flex: 1 }} />
+          </View>
+        </>
+      )}
+      {isBusinessDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Réseau Professionnel</Text>
+          <View style={styles.row}>
+            <HubCard title="Hommes d'Affaires" count={soulsList.length} icon="💼" color="#f59e0b" onPress={() => setCurrentView('BUSINESS')} />
+            <View style={{ flex: 1 }} />
+          </View>
+        </>
+      )}
+      {isActivityDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Activités & Rencontres</Text>
+          <View style={styles.row}>
+            <HubCard title="Rencontres" count={soulsList.length} icon="🤝" color="#14b8a6" onPress={() => setCurrentView('ACTIVITIES')} />
+            <View style={{ flex: 1 }} />
+          </View>
+        </>
+      )}
+      {isYouthDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Gestion de la Jeunesse</Text>
+          <View style={styles.row}>
+            <HubCard title="Sous-groupes" count={groups.length} icon="👥" color="#8b5cf6" onPress={() => setCurrentView('SUBGROUPS')} />
+            <HubCard title="Rencontres" count={soulsList.length} icon="🤝" color="#14b8a6" onPress={() => setCurrentView('ACTIVITIES')} />
           </View>
         </>
       )}
@@ -1060,6 +1200,98 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
             />
           )}
 
+          {/* 🔴 VUE REQUÊTES DE PRIÈRE (Intercession) */}
+          {currentView === 'PRAYERS' && (
+            <PrayerModule deptId={deptId} isLeader={isLeader} activeMembers={activeMembers} />
+          )}
+
+          {/* 🔴 VUE ÉTUDIANTS & INSERTION PRO */}
+          {currentView === 'STUDENTS' && (
+            <StudentsModule deptId={deptId} isLeader={isLeader} />
+          )}
+
+          {/* 🔴 VUE FAMILLES (Suivi des foyers) */}
+          {currentView === 'FAMILIES' && (
+            <FamilyModule deptId={deptId} isLeader={isLeader} />
+          )}
+
+          {/* 🔴 VUE RÉSEAU PROFESSIONNEL (Hommes d'affaires) */}
+          {currentView === 'BUSINESS' && (
+            <BusinessModule deptId={deptId} isLeader={isLeader} />
+          )}
+
+          {/* 🔴 VUE ACTIVITÉS & RENCONTRES (Femmes/Hommes/Jeunesse) */}
+          {currentView === 'ACTIVITIES' && (
+            <ActivitiesModule deptId={deptId} isLeader={isLeader} deptName={deptInfo?.name || ''} />
+          )}
+
+          {/* 🔴 VUE SOUS-GROUPES (Jeunesse — création, renommage, suppression, effectifs) */}
+          {currentView === 'SUBGROUPS' && (
+            <View style={{ flex: 1 }}>
+              {isLeader && (
+                <View style={styles.groupCreationCard}>
+                  <Text style={styles.groupCreationTitle}>Créer un sous-groupe (Ex: Les Flambeaux, Les Ados...)</Text>
+                  <View style={styles.groupRow}>
+                    <TextInput style={styles.groupInput} placeholder="Nom du sous-groupe" value={newGroupName} onChangeText={setNewGroupName} />
+                    <TouchableOpacity style={styles.groupBtn} onPress={handleCreateGroup} disabled={creatingGroup}>
+                      <Text style={styles.groupBtnText}>{creatingGroup ? '...' : 'Ajouter'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              <Text style={styles.hubSubtitle}>Sous-groupes & Effectifs</Text>
+              <FlatList
+                data={groups}
+                keyExtractor={item => item.id}
+                showsVerticalScrollIndicator={false}
+                ListEmptyComponent={<Text style={styles.emptyText}>Aucun sous-groupe créé. {isLeader && 'Utilisez le formulaire ci-dessus pour en créer un.'}</Text>}
+                renderItem={({ item }) => {
+                  const groupMembers = activeMembers.filter(m => m.sub_group_id === item.id);
+                  const leader = activeMembers.find(m => m.user_id === item.leader_id);
+                  return (
+                    <View style={styles.listCard}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <View style={{ flex: 1, paddingRight: 8 }}>
+                          <Text style={styles.memberName}>{item.name}</Text>
+                          <Text style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                            👥 {groupMembers.length} membre{groupMembers.length > 1 ? 's' : ''}
+                          </Text>
+                          {leader && (
+                            <Text style={{ fontSize: 12, color: '#10b981', marginTop: 4, fontWeight: 'bold' }}>
+                              👑 Responsable : {leader.member?.full_name || 'N/A'}
+                            </Text>
+                          )}
+                          {!leader && (
+                            <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, fontStyle: 'italic' }}>
+                              Aucun responsable désigné
+                            </Text>
+                          )}
+                        </View>
+                        {isLeader && (
+                          <View style={{ flexDirection: 'row', gap: 6 }}>
+                            <TouchableOpacity
+                              style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#e0f2fe', alignItems: 'center', justifyContent: 'center' }}
+                              onPress={() => handleRenameGroup(item)}
+                            >
+                              <Text style={{ fontSize: 14 }}>✏️</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}
+                              onPress={() => handleDeleteGroup(item)}
+                            >
+                              <Text style={{ fontSize: 14 }}>🗑</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  );
+                }}
+              />
+            </View>
+          )}
+
           {currentView === 'CHILDREN' && (
             <View style={{ flex: 1 }}>
               {isLeader && (
@@ -1107,51 +1339,190 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                  <Text style={styles.hubSubtitle}>{isMediaDept ? "Agenda & Postes" : "Agenda & Événements"}</Text>
                  {isLeader && <TouchableOpacity style={[styles.addFinanceBtn, { backgroundColor: '#06b6d4' }]} onPress={() => { setEditingPlanning(null); setIsAddingPlanning(true); }}><Text style={styles.addFinanceBtnText}>+ Ajouter</Text></TouchableOpacity>}
                </View>
+
+               {/* 🔴 NOTRE PLANNING (événements du département, dates passées masquées, tri croissant) */}
                <Text style={styles.sectionTitle}>📅 Notre Planning</Text>
-               {plannings.length === 0 ? (
-                 <Text style={styles.emptyText}>Aucun événement programmé.</Text>
-               ) : plannings.map(item => {
-                 const d = new Date(item.event_date);
-                 const dateStr = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-                 const timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-                 const planRoles = planningRoles.filter(r => r.planning_id === item.id);
-                 return (
-                   <View key={item.id} style={styles.planningCard}>
-                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                       <View style={{ flex: 1, paddingRight: 8 }}>
-                         <Text style={[styles.planningTitle, { marginBottom: 4 }]}>{item.title}</Text>
-                         {/* 🔴 BUGFIX : la date et l'heure étaient absentes */}
-                         <Text style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>🗓 {dateStr}</Text>
-                         <Text style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>⏰ {timeStr}</Text>
-                         {item.description ? <Text style={{ fontSize: 13, color: '#475569', marginTop: 6 }}>{item.description}</Text> : null}
-                         {planRoles.length > 0 ? (
-                           <View style={{ marginTop: 8 }}>
-                             {planRoles.map(r => (
-                               <Text key={r.id} style={{ fontSize: 12, color: '#334155' }}>👤 {r.role_name} : {r.member_name}</Text>
-                             ))}
-                           </View>
-                         ) : null}
-                       </View>
-                       {isLeader && (
-                         <View style={{ flexDirection: 'row', gap: 6 }}>
-                           <TouchableOpacity
-                             style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#e0f2fe', alignItems: 'center', justifyContent: 'center' }}
-                             onPress={() => startEditPlanning(item)}
-                           >
-                             <Text style={{ fontSize: 14 }}>✏️</Text>
-                           </TouchableOpacity>
-                           <TouchableOpacity
-                             style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}
-                             onPress={() => handleDeletePlanning(item)}
-                           >
-                             <Text style={{ fontSize: 14 }}>🗑</Text>
-                           </TouchableOpacity>
+               {(() => {
+                 const now = new Date();
+                 now.setHours(0, 0, 0, 0);
+                 const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+                 const upcomingPlannings = plannings
+                   .filter(p => {
+                     const d = new Date(p.event_date);
+                     return d >= now && d <= endOfMonth;
+                   })
+                   .sort((a, b) => new Date(a.event_date).getTime() - new Date(b.event_date).getTime());
+                 if (upcomingPlannings.length === 0) return <Text style={styles.emptyText}>Aucun événement à venir ce mois-ci.</Text>;
+                 return upcomingPlannings.map(item => {
+                   const d = new Date(item.event_date);
+                   const dateStr = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                   const timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                   const planRoles = planningRoles.filter(r => r.planning_id === item.id);
+                   const assignedGroupNames = item.concerns_all ? [] : (item.assigned_groups || []).map(gId => groups.find(g => g.id === gId)?.name).filter(Boolean);
+                   return (
+                     <View key={item.id} style={styles.planningCard}>
+                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                         <View style={{ flex: 1, paddingRight: 8 }}>
+                           <Text style={[styles.planningTitle, { marginBottom: 4 }]}>{item.title}</Text>
+                           <Text style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>🗓 {dateStr}</Text>
+                           <Text style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>⏰ {timeStr}</Text>
+                           {item.description ? <Text style={{ fontSize: 13, color: '#475569', marginTop: 6 }}>{item.description}</Text> : null}
+                           {assignedGroupNames.length > 0 && (
+                             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                               {assignedGroupNames.map((gn, i) => (
+                                 <Text key={i} style={{ fontSize: 11, color: '#0f172a', backgroundColor: '#e0f2fe', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' }}>{gn}</Text>
+                               ))}
+                             </View>
+                           )}
+                           {planRoles.length > 0 ? (
+                             <View style={{ marginTop: 8 }}>
+                               {planRoles.map(r => (
+                                 <Text key={r.id} style={{ fontSize: 12, color: '#334155' }}>👤 {r.role_name} : {r.member_name}</Text>
+                               ))}
+                             </View>
+                           ) : null}
                          </View>
-                       )}
+                         {isLeader && (
+                           <View style={{ flexDirection: 'row', gap: 6 }}>
+                             <TouchableOpacity
+                               style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#e0f2fe', alignItems: 'center', justifyContent: 'center' }}
+                               onPress={() => startEditPlanning(item)}
+                             >
+                               <Text style={{ fontSize: 14 }}>✏️</Text>
+                             </TouchableOpacity>
+                             <TouchableOpacity
+                               style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}
+                               onPress={() => handleDeletePlanning(item)}
+                             >
+                               <Text style={{ fontSize: 14 }}>🗑</Text>
+                             </TouchableOpacity>
+                           </View>
+                         )}
+                       </View>
                      </View>
-                   </View>
-                 );
-               })}
+                   );
+                 });
+               })()}
+
+               {/* 🔴 PROGRAMMES DE L'ÉGLISE À VENIR
+                   - Louange & Accueil : assigner des sous-groupes de service
+                   - Multimédia : assigner des rôles de régie
+                   - Les autres départements : rejoindre un programme */}
+               {allChurchPrograms.length > 0 && (
+                 <>
+                   <Text style={[styles.sectionTitle, { marginTop: 20 }]}>⛪ Programmes de l'Église à venir</Text>
+                   {allChurchPrograms.map(cp => {
+                     const cpDate = new Date(cp.start_at || cp.date || cp.start_time || cp.created_at);
+                     const cpDateStr = cpDate.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                     const cpTimeStr = cpDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+                     // Vérifier si ce département a déjà un planning lié à ce programme
+                     const linkedPlanning = plannings.find(p => p.church_program_id === cp.id);
+                     // Rôles assignés pour ce programme (multimédia)
+                     const cpRoles = linkedPlanning ? planningRoles.filter(r => r.planning_id === linkedPlanning.id) : [];
+                     // Sous-groupes assignés pour ce programme (louange/accueil)
+                     const cpGroupNames = linkedPlanning && !linkedPlanning.concerns_all
+                       ? (linkedPlanning.assigned_groups || []).map((gId: string) => groups.find(g => g.id === gId)?.name).filter(Boolean)
+                       : [];
+                     return (
+                       <View key={cp.id} style={[styles.planningCard, { borderLeftWidth: 4, borderLeftColor: '#3b82f6' }]}>
+                         <View style={{ flex: 1 }}>
+                           <Text style={[styles.planningTitle, { color: '#3b82f6' }]}>{cp.title}</Text>
+                           <Text style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>🗓 {cpDateStr}</Text>
+                           <Text style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>⏰ {cpTimeStr}</Text>
+                           {cp.description && <Text style={{ fontSize: 13, color: '#475569', marginTop: 6 }}>{cp.description}</Text>}
+
+                           {/* Sous-groupes de service assignés (Louange/Accueil/Jeunesse) */}
+                           {(isChoirDept || isUsherDept || isYouthDept) && hasSubGroups && (
+                             <View style={{ marginTop: 8 }}>
+                               <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#0f172a', marginBottom: 4 }}>👥 Sous-groupes de service :</Text>
+                               {cpGroupNames.length > 0 ? (
+                                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+                                   {cpGroupNames.map((gn: string, i: number) => (
+                                     <Text key={i} style={{ fontSize: 11, color: '#0f172a', backgroundColor: '#e0f2fe', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' }}>{gn}</Text>
+                                   ))}
+                                 </View>
+                               ) : (
+                                 <Text style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>Aucun sous-groupe assigné</Text>
+                               )}
+                               {isLeader && (
+                                 <TouchableOpacity
+                                   style={{ marginTop: 6, backgroundColor: '#3b82f6', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignSelf: 'flex-start' }}
+                                   onPress={async () => {
+                                     if (linkedPlanning) {
+                                       // Éditer le planning existant pour modifier les sous-groupes
+                                       startEditPlanning(linkedPlanning);
+                                     } else {
+                                       // Créer un planning lié à ce programme, puis ouvrir l'édition
+                                       const newPlanId = await handleAddPlanning(true, cp);
+                                       if (newPlanId) {
+                                         // Retrouver le planning créé et ouvrir l'édition
+                                         const { data: newPlan } = await supabase.from('department_plannings').select('*').eq('id', newPlanId).single();
+                                         if (newPlan) startEditPlanning(newPlan);
+                                       }
+                                     }
+                                   }}
+                                 >
+                                   <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>
+                                     {linkedPlanning ? '✏️ Modifier les sous-groupes' : '+ Assigner des sous-groupes'}
+                                   </Text>
+                                 </TouchableOpacity>
+                               )}
+                             </View>
+                           )}
+
+                           {/* Rôles de régie assignés (Multimédia) */}
+                           {isMediaDept && (
+                             <View style={{ marginTop: 8 }}>
+                               <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#0f172a', marginBottom: 4 }}>🎬 Postes de régie :</Text>
+                               {cpRoles.length > 0 ? (
+                                 <View>
+                                   {cpRoles.map(r => (
+                                     <Text key={r.id} style={{ fontSize: 12, color: '#334155' }}>👤 {r.role_name} : {r.member_name}</Text>
+                                   ))}
+                                 </View>
+                               ) : (
+                                 <Text style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>Aucun poste assigné</Text>
+                               )}
+                               {isLeader && (
+                                 <TouchableOpacity
+                                   style={{ marginTop: 6, backgroundColor: '#8b5cf6', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignSelf: 'flex-start' }}
+                                   onPress={async () => {
+                                     if (linkedPlanning) {
+                                       setSelectedPlanningId(linkedPlanning.id);
+                                       setIsAssigningRole(true);
+                                     } else {
+                                       // Créer un planning lié au programme, puis ouvrir l'assignation
+                                       const newPlanId = await handleAddPlanning(true, cp);
+                                       if (newPlanId) {
+                                         setSelectedPlanningId(newPlanId);
+                                         setIsAssigningRole(true);
+                                       }
+                                     }
+                                   }}
+                                 >
+                                   <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>
+                                     {linkedPlanning ? '✏️ Gérer les postes' : '+ Créer & assigner des postes'}
+                                   </Text>
+                                 </TouchableOpacity>
+                               )}
+                             </View>
+                           )}
+
+                           {/* Rejoindre le programme (autres départements) */}
+                           {!isChoirDept && !isUsherDept && !isYouthDept && !isMediaDept && isLeader && !linkedPlanning && (
+                             <TouchableOpacity
+                               style={{ marginTop: 8, backgroundColor: '#06b6d4', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, alignSelf: 'flex-start' }}
+                               onPress={() => handleAddPlanning(true, cp)}
+                             >
+                               <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>+ Rejoindre ce programme</Text>
+                             </TouchableOpacity>
+                           )}
+                         </View>
+                       </View>
+                     );
+                   })}
+                 </>
+               )}
                <View style={{ height: 40 }} />
              </ScrollView>
           )}
@@ -1605,6 +1976,84 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.modalBtnSubmit} onPress={editingPlanning ? handleEditPlanning : () => handleAddPlanning(false)}>
                   <Text style={styles.modalBtnSubmitText}>Créer</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* === MODALE : ASSIGNER UN RÔLE DE RÉGIE (Multimédia) === */}
+      <Modal visible={isAssigningRole} transparent animationType="slide">
+        <KeyboardAvoidingView style={styles.modalOverlayBottom} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[styles.modalContentBottom, {maxHeight: '70%'}]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Assigner un poste de régie</Text>
+              <TouchableOpacity onPress={() => setIsAssigningRole(false)}>
+                <Text style={{fontSize: 24, color: '#64748b'}}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              {/* Liste des rôles déjà assignés */}
+              {planningRoles.filter(r => r.planning_id === selectedPlanningId).length > 0 && (
+                <View style={{ marginBottom: 15 }}>
+                  <Text style={styles.inputLabel}>Postes déjà assignés</Text>
+                  {planningRoles.filter(r => r.planning_id === selectedPlanningId).map(r => (
+                    <View key={r.id} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+                      <View>
+                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#0f172a' }}>{r.role_name}</Text>
+                        <Text style={{ fontSize: 12, color: '#64748b' }}>👤 {r.member_name}</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center', justifyContent: 'center' }}
+                        onPress={async () => {
+                          await supabase.from('department_planning_roles').delete().eq('id', r.id);
+                          loadInitialData(false);
+                        }}
+                      >
+                        <Text style={{ fontSize: 14 }}>🗑</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <Text style={styles.inputLabel}>Nouveau poste</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Nom du poste (ex: Son, Vidéo, Lumière, Projection...)"
+                value={newRole.role_name}
+                onChangeText={t => setNewRole({ ...newRole, role_name: t })}
+              />
+              <Text style={[styles.inputLabel, { marginTop: 10 }]}>Membre assigné</Text>
+              <View style={{ zIndex: 10 }}>
+                <TouchableOpacity style={styles.dropdownSelector} onPress={() => setIsMemberDropdownOpen(!isMemberDropdownOpen)}>
+                  <Text style={newRole.user_id ? styles.dropdownTextSelected : styles.dropdownTextPlaceholder}>
+                    {newRole.user_id ? activeMembers.find(m => m.user_id === newRole.user_id)?.member?.full_name || 'Membre' : '-- Sélectionner un membre --'}
+                  </Text>
+                  <Text style={{ color: '#94a3b8' }}>▼</Text>
+                </TouchableOpacity>
+                {isMemberDropdownOpen && (
+                  <View style={styles.dropdownContainer}>
+                    <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled>
+                      {activeMembers.map(m => (
+                        <TouchableOpacity key={m.user_id} style={styles.dropdownItem} onPress={() => {
+                          setNewRole({ ...newRole, user_id: m.user_id });
+                          setIsMemberDropdownOpen(false);
+                        }}>
+                          <Text style={styles.dropdownItemText}>{m.member?.full_name || 'Membre'}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+              <View style={[styles.modalActionsRow, { marginBottom: 30 }]}>
+                <TouchableOpacity style={styles.modalBtnCancel} onPress={() => setIsAssigningRole(false)}>
+                  <Text style={styles.modalBtnCancelText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.modalBtnSubmit} onPress={handleAssignRole}>
+                  <Text style={styles.modalBtnSubmitText}>Assigner</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
