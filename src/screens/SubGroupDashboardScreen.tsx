@@ -60,8 +60,8 @@ export default function SubGroupDashboardScreen({ groupId, onBack }: { groupId: 
         setIsLeader(group.leader_id === user?.id);
         
         let deptName = 'Département';
-        const { data: dept } = await supabase.from('church_departments').select('name, custom_name, church_id').eq('id', group.department_id).single();
-        if (dept) deptName = dept.custom_name || dept.name;
+        const { data: dept } = await supabase.from('church_departments').select('custom_name, church_id, community_departments(global_departments(default_name))').eq('id', group.department_id).single();
+        if (dept) deptName = dept.custom_name || (dept as any)?.community_departments?.global_departments?.default_name || 'Département';
 
         setGroupInfo({ ...group, departmentName: deptName, church_id: dept?.church_id });
 

@@ -14,17 +14,29 @@ export default function ForceChangePasswordScreen({ onPasswordChanged }: { onPas
     }
 
     setLoading(true);
-    // Met à jour le mot de passe dans Supabase Auth
+    // 1. Met à jour le mot de passe dans Supabase Auth
     const { error } = await supabase.auth.updateUser({
       password: newPassword
     });
 
     if (error) {
       Alert.alert('Erreur', error.message);
-    } else {
-      Alert.alert('Succès', 'Votre mot de passe a été mis à jour de manière sécurisée !');
-      onPasswordChanged(); // On signale à l'App qu'il peut accéder au Dashboard
+      setLoading(false);
+      return;
     }
+
+    // 2. Clear le flag must_change_password côté serveur (même backend
+    //    partagé avec le web). Utilise le client authentifié (RLS).
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase
+        .from('user_profiles')
+        .update({ must_change_password: false })
+        .eq('id', user.id);
+    }
+
+    Alert.alert('Succès', 'Votre mot de passe a été mis à jour de manière sécurisée !');
+    onPasswordChanged(); // On signale à l'App qu'il peut accéder au Dashboard
     setLoading(false);
   }
 

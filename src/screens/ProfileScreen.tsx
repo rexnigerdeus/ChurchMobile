@@ -13,6 +13,9 @@ export default function ProfileScreen() {
   const [updating, setUpdating] = useState(false);
   const [profile, setProfile] = useState<any>({});
   const [isSystemProfile, setIsSystemProfile] = useState(false);
+  // Section changement de mot de passe
+  const [newPassword, setNewPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
     fetchProfile();
@@ -171,6 +174,33 @@ export default function ProfileScreen() {
     ]);
   }
 
+  // Changement de mot de passe volontaire (depuis le profil connecté).
+  // Met à jour Supabase Auth puis clear le flag must_change_password
+  // côté serveur (même backend partagé avec le web).
+  async function handleChangePassword() {
+    if (newPassword.length < 6) {
+      Alert.alert('Erreur', 'Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
+    setChangingPassword(true);
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      Alert.alert('Erreur', error.message);
+      setChangingPassword(false);
+      return;
+    }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase
+        .from('user_profiles')
+        .update({ must_change_password: false })
+        .eq('id', user.id);
+    }
+    setNewPassword('');
+    Alert.alert('Succès', 'Votre mot de passe a été mis à jour avec succès !');
+    setChangingPassword(false);
+  }
+
   if (loading) return <ActivityIndicator size="large" color="#0f172a" style={{marginTop: 50}} />;
 
   return (
@@ -275,6 +305,30 @@ export default function ProfileScreen() {
 
         <TouchableOpacity style={styles.btn} onPress={handleUpdate} disabled={updating}>
           {updating ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Mettre à jour mon profil</Text>}
+        </TouchableOpacity>
+      </View>
+
+      {/* Section Sécurité : changement de mot de passe */}
+      <View style={[styles.card, { marginTop: 16 }]}>
+        <Text style={styles.sectionTitle}>Sécurité</Text>
+        <Text style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+          Définissez un nouveau mot de passe (minimum 6 caractères).
+        </Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Nouveau mot de passe"
+          secureTextEntry
+          value={newPassword}
+          onChangeText={setNewPassword}
+        />
+        <TouchableOpacity
+          style={[styles.btn, { marginTop: 8 }]}
+          onPress={handleChangePassword}
+          disabled={changingPassword || newPassword.length < 6}
+        >
+          {changingPassword
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.btnText}>Changer mon mot de passe</Text>}
         </TouchableOpacity>
       </View>
 

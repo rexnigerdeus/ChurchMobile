@@ -17,10 +17,11 @@ import StudentsModule from '../components/departments/StudentsModule';
 import FamilyModule from '../components/departments/FamilyModule';
 import BusinessModule from '../components/departments/BusinessModule';
 import ActivitiesModule from '../components/departments/ActivitiesModule';
+import FinanceHQModule from '../components/departments/FinanceHQModule';
 
 const { width } = Dimensions.get('window');
 
-type ViewState = 'HUB' | 'PENDING' | 'MEMBERS' | 'SONGS' | 'FINANCES' | 'PLANNING' | 'ANNOUNCEMENTS' | 'CHILDREN' | 'SOULS' | 'PROJECTS' | 'EQUIPMENTS' | 'HEADCOUNTS' | 'PRAYERS' | 'STUDENTS' | 'FAMILIES' | 'BUSINESS' | 'ACTIVITIES' | 'SUBGROUPS';
+type ViewState = 'HUB' | 'PENDING' | 'MEMBERS' | 'SONGS' | 'FINANCES' | 'PLANNING' | 'ANNOUNCEMENTS' | 'CHILDREN' | 'SOULS' | 'PROJECTS' | 'EQUIPMENTS' | 'HEADCOUNTS' | 'PRAYERS' | 'STUDENTS' | 'FAMILIES' | 'BUSINESS' | 'ACTIVITIES' | 'SUBGROUPS' | 'FINANCE_HQ';
 
 export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: string, onBack: () => void }) {
   const [currentView, setCurrentView] = useState<ViewState>('HUB');
@@ -39,6 +40,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [isBusinessDept, setIsBusinessDept] = useState(false);
   const [isActivityDept, setIsActivityDept] = useState(false);
   const [isYouthDept, setIsYouthDept] = useState(false);
+  const [isFinanceHQDept, setIsFinanceHQDept] = useState(false);
   const [hasSubGroups, setHasSubGroups] = useState(false);
   
   const [deptInfo, setDeptInfo] = useState<any>(null);
@@ -94,6 +96,14 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
   const [isClassDropdownOpen, setIsClassDropdownOpen] = useState(false);
 
   const [soulsList, setSoulsList] = useState<any[]>([]);
+  // 🔴 Compteurs spécifiques pour les HubCards des modules dédiés
+  //    (soulsList est lié à l'évangélisation ; on ne doit pas l'afficher
+  //     pour Famille/Prière/Étudiants/Business/Activités)
+  const [familiesCount, setFamiliesCount] = useState(0);
+  const [prayersCount, setPrayersCount] = useState(0);
+  const [studentsCount, setStudentsCount] = useState(0);
+  const [businessCount, setBusinessCount] = useState(0);
+  const [activitiesCount, setActivitiesCount] = useState(0);
   const [isAddingSoul, setIsAddingSoul] = useState(false);
   const [newSoul, setNewSoul] = useState({ 
     id: '', first_name: '', last_name: '', phone: '', address: '', profession: '', assigned_to: '', photo_url: '',
@@ -161,6 +171,10 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         .eq('id', deptId).single();
       
       let isChoir = false; let isChild = false; let isEvang = false; let isMedia = false; let isUsher = false;
+      // 🔴 Déclarés au niveau fonction pour être réutilisés plus bas
+      //    (countPromises des modules dédiés).
+      let isPrayer = false; let isStudents = false; let isFamily = false; let isBusiness = false;
+      let isYouth = false; let isFinanceHQ = false; let isActivity = false;
 
       if (dept) {
         // 🔴 Récupérer le default_name via la jointure community_departments → global_departments
@@ -176,16 +190,20 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         isEvang = !!lowered.match(/évangélisation|evangelisation|gagnants|âmes|mission/);
         isMedia = !!lowered.match(/multimédia|multimedia|technique|sonorisation|communication|media/);
         isUsher = !!lowered.match(/ordre|accueil|protocole|huissier/);
-        const isPrayer = !!lowered.match(/intercession|prière|prayer|veille/);
-        const isStudents = !!lowered.match(/élèves|étudiants|insertion|scolaire|étudiant/);
-        const isFamily = !!lowered.match(/famille|foyer|conjugal|ménage/);
-        const isBusiness = !!lowered.match(/affaires|business|entrepreneuriat|professionnel/);
-        const isYouth = !!lowered.match(/jeunesse|jeune|youth/);
-        // isActivity = Femmes ou Hommes, mais PAS "Hommes d'affaires" (déjà capté par isBusiness)
-        const isActivity = !isBusiness && !!lowered.match(/femmes|hommes|women|men/);
+        const isPrayerLocal = !!lowered.match(/intercession|prière|prayer|veille/);
+        const isStudentsLocal = !!lowered.match(/élèves|étudiants|insertion|scolaire|étudiant/);
+        const isFamilyLocal = !!lowered.match(/famille|foyer|conjugal|ménage/);
+        const isBusinessLocal = !!lowered.match(/affaires|business|entrepreneuriat|professionnel/);
+        const isYouthLocal = !!lowered.match(/jeunesse|jeune|youth/);
+        // isActivity = Femmes ou Hommes, mais PAS "Hommes d'affaires" (isBusiness)
+        // ni "Finance HQ" (isFinanceHQ) dont le nom pourrait contenir "hommes"
+        const isFinanceHQLocal = !!lowered.match(/finance.*hq|finance hq|cotisation/);
+        const isActivityLocal = !isBusinessLocal && !isFinanceHQLocal && !!lowered.match(/femmes|hommes|women|men/);
+        isPrayer = isPrayerLocal; isStudents = isStudentsLocal; isFamily = isFamilyLocal; isBusiness = isBusinessLocal;
+        isYouth = isYouthLocal; isFinanceHQ = isFinanceHQLocal; isActivity = isActivityLocal;
         
         setIsChoirDept(isChoir); setIsChildrenDept(isChild); setIsEvangelismDept(isEvang); setIsMediaDept(isMedia); setIsUsherDept(isUsher);
-        setIsPrayerDept(isPrayer); setIsStudentsDept(isStudents); setIsFamilyDept(isFamily); setIsBusinessDept(isBusiness); setIsActivityDept(isActivity); setIsYouthDept(isYouth);
+        setIsPrayerDept(isPrayer); setIsStudentsDept(isStudents); setIsFamilyDept(isFamily); setIsBusinessDept(isBusiness); setIsActivityDept(isActivity); setIsYouthDept(isYouth); setIsFinanceHQDept(isFinanceHQ);
         setHasSubGroups(isChoir || isUsher || isYouth);
 
         // 🔴 Récupération du total des fidèles pour les analytiques
@@ -299,6 +317,16 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
       if (isEvang) modulePromises.push(supabase.from('department_souls').select('*').eq('department_id', deptId).order('created_at', { ascending: false }).then(r=>({k:'souls', d:r.data})));
       if (isChoir) modulePromises.push(supabase.from('department_songs').select('*').eq('department_id', deptId).order('title', { ascending: true }).then(r=>({k:'songs', d:r.data})));
 
+      // 🔴 Compteurs légers pour les HubCards des modules dédiés (Famille, Prière,
+      //    Étudiants, Business, Activités). On ne charge que le count pour rester
+      //    performant ; les modules détaillés chargent leurs propres données.
+      const countPromises: Promise<any>[] = [];
+      if (isFamily) countPromises.push(supabase.from('department_families').select('id', { count: 'exact', head: true }).eq('department_id', deptId).then(r => ({ k: 'families', c: r.count })));
+      if (isPrayer) countPromises.push(supabase.from('department_prayer_requests').select('id', { count: 'exact', head: true }).eq('department_id', deptId).then(r => ({ k: 'prayers', c: r.count })));
+      if (isStudents) countPromises.push(supabase.from('department_students').select('id', { count: 'exact', head: true }).eq('department_id', deptId).then(r => ({ k: 'students', c: r.count })));
+      if (isBusiness) countPromises.push(supabase.from('department_business_members').select('id', { count: 'exact', head: true }).eq('department_id', deptId).then(r => ({ k: 'business', c: r.count })));
+      if (isActivity) countPromises.push(supabase.from('department_activities').select('id', { count: 'exact', head: true }).eq('department_id', deptId).then(r => ({ k: 'activities', c: r.count })));
+
       const moduleResults = await Promise.all(modulePromises);
       for (const res of moduleResults) {
           switch(res.k) {
@@ -319,6 +347,19 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
             case 'souls': setSoulsList(res.d?.map((s: any) => ({ ...s, assigned_member: s.assigned_to ? activeMembs.find(p => p.user_id === s.assigned_to)?.member.full_name : null })) || []); break;
             case 'songs': setSongs(res.d || []); break;
           }
+      }
+
+      // 🔴 Compteurs des modules dédiés (HubCards)
+      const countResults = await Promise.all(countPromises);
+      for (const res of countResults) {
+        const count = (res as any).c ?? 0;
+        switch ((res as any).k) {
+          case 'families': setFamiliesCount(count); break;
+          case 'prayers': setPrayersCount(count); break;
+          case 'students': setStudentsCount(count); break;
+          case 'business': setBusinessCount(count); break;
+          case 'activities': setActivitiesCount(count); break;
+        }
       }
 
       setFinances(rawFinancesRes.data?.map((fin: any) => ({ ...fin, member: fin.member_id ? { full_name: activeMembs.find(p => p.user_id === fin.member_id)?.member.full_name || 'Inconnu' } : null })) || []);
@@ -911,7 +952,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <>
           <Text style={styles.hubSubtitle}>Intercession & Prière</Text>
           <View style={styles.row}>
-            <HubCard title="Requêtes de Prière" count={soulsList.length} icon="🙏" color="#6366f1" onPress={() => setCurrentView('PRAYERS')} />
+            <HubCard title="Requêtes de Prière" count={prayersCount} icon="🙏" color="#6366f1" onPress={() => setCurrentView('PRAYERS')} />
             <View style={{ flex: 1 }} />
           </View>
         </>
@@ -920,7 +961,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <>
           <Text style={styles.hubSubtitle}>Suivi Scolaire & Insertion</Text>
           <View style={styles.row}>
-            <HubCard title="Étudiants & Jeunes Pros" count={soulsList.length} icon="🎓" color="#0ea5e9" onPress={() => setCurrentView('STUDENTS')} />
+            <HubCard title="Étudiants & Jeunes Pros" count={studentsCount} icon="🎓" color="#0ea5e9" onPress={() => setCurrentView('STUDENTS')} />
             <View style={{ flex: 1 }} />
           </View>
         </>
@@ -929,7 +970,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <>
           <Text style={styles.hubSubtitle}>Suivi des Familles</Text>
           <View style={styles.row}>
-            <HubCard title="Registre des Familles" count={soulsList.length} icon="👨‍👩‍👧‍👦" color="#ec4899" onPress={() => setCurrentView('FAMILIES')} />
+            <HubCard title="Registre des Familles" count={familiesCount} icon="👨‍👩‍👧‍👦" color="#ec4899" onPress={() => setCurrentView('FAMILIES')} />
             <View style={{ flex: 1 }} />
           </View>
         </>
@@ -938,7 +979,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <>
           <Text style={styles.hubSubtitle}>Réseau Professionnel</Text>
           <View style={styles.row}>
-            <HubCard title="Hommes d'Affaires" count={soulsList.length} icon="💼" color="#f59e0b" onPress={() => setCurrentView('BUSINESS')} />
+            <HubCard title="Hommes d'Affaires" count={businessCount} icon="💼" color="#f59e0b" onPress={() => setCurrentView('BUSINESS')} />
             <View style={{ flex: 1 }} />
           </View>
         </>
@@ -947,7 +988,7 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
         <>
           <Text style={styles.hubSubtitle}>Activités & Rencontres</Text>
           <View style={styles.row}>
-            <HubCard title="Rencontres" count={soulsList.length} icon="🤝" color="#14b8a6" onPress={() => setCurrentView('ACTIVITIES')} />
+            <HubCard title="Rencontres" count={activitiesCount} icon="🤝" color="#14b8a6" onPress={() => setCurrentView('ACTIVITIES')} />
             <View style={{ flex: 1 }} />
           </View>
         </>
@@ -957,26 +998,41 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
           <Text style={styles.hubSubtitle}>Gestion de la Jeunesse</Text>
           <View style={styles.row}>
             <HubCard title="Sous-groupes" count={groups.length} icon="👥" color="#8b5cf6" onPress={() => setCurrentView('SUBGROUPS')} />
-            <HubCard title="Rencontres" count={soulsList.length} icon="🤝" color="#14b8a6" onPress={() => setCurrentView('ACTIVITIES')} />
+            <HubCard title="Rencontres" count={activitiesCount} icon="🤝" color="#14b8a6" onPress={() => setCurrentView('ACTIVITIES')} />
           </View>
         </>
       )}
-      <Text style={styles.hubSubtitle}>Vie du département {!isLeader && `(${deptInfo?.name})`}</Text>
-      <View style={styles.row}>
-        <HubCard title={isMediaDept ? "Agenda & Rôles" : "Planning"} count={plannings.length} icon="📅" color="#06b6d4" onPress={() => setCurrentView('PLANNING')} />
-        <HubCard title="Annonces" count={announcements.length} icon="📢" color="#ec4899" onPress={() => setCurrentView('ANNOUNCEMENTS')} />
-      </View>
-      {isChoirDept && (
-        <View style={styles.row}>
-          <HubCard title="Répertoire" count={songs.length} icon="🎵" color="#8b5cf6" onPress={() => setCurrentView('SONGS')} />
-          {isLeader ? <HubCard title="Finances" count={finances.length} icon="💰" color="#10b981" onPress={() => setCurrentView('FINANCES')} /> : <View style={{ flex: 1 }} />}
-        </View>
+      {isFinanceHQDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Cotisations & Finance HQ</Text>
+          <View style={styles.row}>
+            <HubCard title="Cotisations Région" count={finances.length} icon="🏦" color="#10b981" onPress={() => setCurrentView('FINANCE_HQ')} />
+            <View style={{ flex: 1 }} />
+          </View>
+        </>
       )}
-      {!isChoirDept && isLeader && (
-        <View style={styles.row}>
-          <HubCard title="Finances" count={finances.length} icon="💰" color="#10b981" onPress={() => setCurrentView('FINANCES')} />
-          <View style={{ flex: 1 }} />
-        </View>
+      {/* 🔴 Finance HQ : on retire Finances, Annonces, Planning, Rencontres.
+          On ne garde que Candidatures, Membres et Cotisations région. */}
+      {!isFinanceHQDept && (
+        <>
+          <Text style={styles.hubSubtitle}>Vie du département {!isLeader && `(${deptInfo?.name})`}</Text>
+          <View style={styles.row}>
+            <HubCard title={isMediaDept ? "Agenda & Rôles" : "Planning"} count={plannings.length} icon="📅" color="#06b6d4" onPress={() => setCurrentView('PLANNING')} />
+            <HubCard title="Annonces" count={announcements.length} icon="📢" color="#ec4899" onPress={() => setCurrentView('ANNOUNCEMENTS')} />
+          </View>
+          {isChoirDept && (
+            <View style={styles.row}>
+              <HubCard title="Répertoire" count={songs.length} icon="🎵" color="#8b5cf6" onPress={() => setCurrentView('SONGS')} />
+              {isLeader ? <HubCard title="Finances" count={finances.length} icon="💰" color="#10b981" onPress={() => setCurrentView('FINANCES')} /> : <View style={{ flex: 1 }} />}
+            </View>
+          )}
+          {!isChoirDept && isLeader && (
+            <View style={styles.row}>
+              <HubCard title="Finances" count={finances.length} icon="💰" color="#10b981" onPress={() => setCurrentView('FINANCES')} />
+              <View style={{ flex: 1 }} />
+            </View>
+          )}
+        </>
       )}
     </ScrollView>
   );
@@ -1223,6 +1279,11 @@ export default function DepartmentDashboardScreen({ deptId, onBack }: { deptId: 
           {/* 🔴 VUE ACTIVITÉS & RENCONTRES (Femmes/Hommes/Jeunesse) */}
           {currentView === 'ACTIVITIES' && (
             <ActivitiesModule deptId={deptId} isLeader={isLeader} deptName={deptInfo?.name || ''} />
+          )}
+
+          {/* 🔴 VUE FINANCE HQ (Cotisations église → région) */}
+          {currentView === 'FINANCE_HQ' && (
+            <FinanceHQModule deptId={deptId} churchId={deptInfo?.church_id} isLeader={isLeader} />
           )}
 
           {/* 🔴 VUE SOUS-GROUPES (Jeunesse — création, renommage, suppression, effectifs) */}

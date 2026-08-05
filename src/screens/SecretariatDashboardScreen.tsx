@@ -3,19 +3,16 @@ import React, { useState, useEffect } from 'react';
 import { View, ScrollView, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, Alert, TextInput, Modal } from 'react-native';
 import { supabase } from '../lib/supabase';
 
-type Tab = 'PENDING' | 'REGISTRY' | 'AGENDA' | 'STAFF';
+type Tab = 'PENDING' | 'REGISTRY' | 'AGENDA';
 
 export default function SecretariatDashboardScreen({ onBack }: { onBack: () => void }) {
   const [activeTab, setActiveTab] = useState<Tab>('PENDING');
   const [loading, setLoading] = useState(true);
-  const [churchId, setChurchId] = useState<string | null>(null);
   
   // Données
   const [pendingMembers, setPendingMembers] = useState<any[]>([]);
   const [registryMembers, setRegistryMembers] = useState<any[]>([]);
   const [appointments, setAppointments] = useState<any[]>([]);
-  const [staffList, setStaffList] = useState<any[]>([]);
-  const [availableDepts, setAvailableDepts] = useState<any[]>([]);
   
   // États secondaires
   const [search, setSearch] = useState('');
@@ -31,18 +28,7 @@ export default function SecretariatDashboardScreen({ onBack }: { onBack: () => v
     const { data: { user } } = await supabase.auth.getUser();
     const { data: role } = await supabase.from('user_roles').select('entity_id').eq('user_id', user?.id).single();
 
-    if (activeTab === 'STAFF') {
-        // Charger les membres
-        const { data: members } = await supabase.from('church_members').select('id, full_name, user_id').eq('church_id', role.entity_id).eq('status', 'APPROVED').not('user_id', 'is', null);
-        setStaffList(members || []);
-
-        // Charger les départements
-        const { data: depts } = await supabase.from('church_departments').select('id, name').eq('church_id', role.entity_id);
-        setAvailableDepts(depts || []);
-    }
-
     if (!role) return;
-    setChurchId(role.entity_id);
 
     if (activeTab === 'PENDING') {
       const { data } = await supabase.from('church_members').select('*').eq('church_id', role.entity_id).eq('status', 'PENDING').order('created_at', { ascending: false });
@@ -54,16 +40,14 @@ export default function SecretariatDashboardScreen({ onBack }: { onBack: () => v
     } 
     else if (activeTab === 'AGENDA') {
       const { data } = await supabase.from('pastoral_appointments').select(`*, member:user_profiles!pastoral_appointments_member_id_fkey(full_name)`).eq('church_id', role.entity_id).order('appointment_date', { ascending: true });
-      setAppointments(data || []);
-    }
-    else if (activeTab === 'STAFF') {
-      // Charger les membres
-      const { data: members } = await supabase.from('church_members').select('id, full_name, user_id').eq('church_id', role.entity_id).eq('status', 'APPROVED').not('user_id', 'is', null);
-      setStaffList(members || []);
-      
-      // 🔴 Charger les départements disponibles pour cette église
-      const { data: depts } = await supabase.from('church_departments').select('id, name').eq('church_id', role.entity_id);
-      setAvailableDepts(depts || []);
+      // Tri : demandes en attente (PENDING) en haut, autres statuts en bas
+      const statusOrder = { PENDING: 0, APPROVED: 1, REJECTED: 2, CANCELLED: 3 } as Record<string, number>;
+      const sorted = (data || []).sort((a: any, b: any) => {
+        const orderDiff = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+        if (orderDiff !== 0) return orderDiff;
+        return new Date(a.appointment_date).getTime() - new Date(b.appointment_date).getTime();
+      });
+      setAppointments(sorted);
     }
     setLoading(false);
   }
@@ -90,32 +74,6 @@ export default function SecretariatDashboardScreen({ onBack }: { onBack: () => v
     }
   }
 
-  async function handlePromoteToDeptLeader(userId: string) {
-    if (!userId) return Alert.alert('Erreur', 'Ce membre n\'a pas de compte connecté.');
-    if (availableDepts.length === 0) return Alert.alert('Erreur', "Créez d'abord des départements sur le web.");
-    
-    // Créer la liste des options à afficher
-    const options = availableDepts.map(dept => ({
-      text: dept.name,
-      onPress: async () => {
-        const { error } = await supabase.from('user_roles').insert({ 
-          user_id: userId, 
-          role: 'DEPARTMENT_LEADER', 
-          entity_id: churchId,
-          department_id: dept.id // 👈 On sauvegarde le département choisi
-        });
-        if (error) Alert.alert('Erreur', 'Ce membre a déjà un rôle administratif.');
-        else Alert.alert('Succès', `Nommé responsable de : ${dept.name}`);
-      }
-    }));
-
-    Alert.alert(
-      'Nommer un Responsable', 
-      'Choisissez le département à lui confier :', 
-      [...options, { text: 'Annuler', style: 'cancel' }]
-    );
-  }
-
   return (
     <View style={styles.container}>
       {/* HEADER */}
@@ -136,9 +94,6 @@ export default function SecretariatDashboardScreen({ onBack }: { onBack: () => v
           </TouchableOpacity>
           <TouchableOpacity style={[styles.tab, activeTab === 'AGENDA' && styles.tabActive]} onPress={() => setActiveTab('AGENDA')}>
             <Text style={[styles.tabText, activeTab === 'AGENDA' && styles.tabTextActive]}>Agenda</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.tab, activeTab === 'STAFF' && styles.tabActive]} onPress={() => setActiveTab('STAFF')}>
-            <Text style={[styles.tabText, activeTab === 'STAFF' && styles.tabTextActive]}>Staff</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -200,21 +155,6 @@ export default function SecretariatDashboardScreen({ onBack }: { onBack: () => v
             />
           )}
 
-          {/* ONGLET 4 : STAFF / DÉPARTEMENTS */}
-          {activeTab === 'STAFF' && (
-            <FlatList data={staffList} keyExtractor={(item) => item.id}
-              ListEmptyComponent={<Text style={styles.emptyText}>Aucun membre inscrit sur l'application.</Text>}
-              renderItem={({ item }) => (
-                <View style={styles.memberItem}>
-                  <Text style={styles.memberName}>{item.full_name}</Text>
-                  <TouchableOpacity style={styles.btnRole} onPress={() => handlePromoteToDeptLeader(item.user_id)}>
-                    <Text style={{fontSize: 10, color: '#fff', fontWeight: 'bold'}}>+ Nommer Resp.</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            />
-          )}
-
         </View>
       )}
 
@@ -263,7 +203,6 @@ const styles = StyleSheet.create({
   searchBar: { backgroundColor: '#fff', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 15 },
   memberItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 8, borderWidth: 1, borderColor: '#e2e8f0' },
   memberName: { fontWeight: '600', fontSize: 14 },
-  btnRole: { backgroundColor: '#8b5cf6', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
   modalContent: { backgroundColor: '#fff', padding: 20, borderRadius: 16 },
   modalTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 15 },

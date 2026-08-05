@@ -3,11 +3,10 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 
-export default function LoginScreen({ 
-  onTempLogin, onNavigateToRegister 
-}: { 
-  onTempLogin: () => Promise<void>, 
-  onNavigateToRegister: () => void 
+export default function LoginScreen({
+  onNavigateToRegister
+}: {
+  onNavigateToRegister: () => void
 }) {
 
   const [email, setEmail] = useState('');
@@ -17,12 +16,29 @@ export default function LoginScreen({
 
   async function handleLogin() {
     setLoading(true);
-    let usedTempPassword = password === 'MdpTemporaire123!';
-    if (usedTempPassword) await onTempLogin();
-
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) Alert.alert('Erreur', error.message);
     setLoading(false);
+  }
+
+  async function handleForgotPassword() {
+    if (!email) {
+      Alert.alert('Email requis', 'Saisissez votre email ci-dessus, puis appuyez sur "Mot de passe oublié" pour recevoir un lien de réinitialisation.');
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: 'https://mon-eglise.vercel.app/',
+    });
+    setLoading(false);
+    if (error) {
+      Alert.alert('Erreur', error.message);
+    } else {
+      Alert.alert(
+        'Email envoyé',
+        'Si un compte existe pour cet email, un lien de réinitialisation vient de lui être envoyé. Vérifiez votre boîte mail (et vos spams). Le lien s\'ouvrira sur la plateforme web où vous pourrez définir un nouveau mot de passe, valable aussi sur l\'app mobile.'
+      );
+    }
   }
 
   return (
@@ -64,6 +80,11 @@ export default function LoginScreen({
           <TouchableOpacity style={styles.loginButton} onPress={handleLogin} disabled={loading}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginButtonText}>Se connecter</Text>}
           </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleForgotPassword} disabled={loading} style={{ marginTop: 15, alignItems: 'center' }}>
+            <Text style={{ color: '#64748b', fontSize: 13 }}>Mot de passe oublié ?</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity onPress={onNavigateToRegister} style={{ marginTop: 25, alignItems: 'center' }}>
             <Text style={{ color: '#64748b' }}>Pas encore membre ? <Text style={{ color: '#0f172a', fontWeight: 'bold' }}>S'inscrire</Text></Text>
           </TouchableOpacity>

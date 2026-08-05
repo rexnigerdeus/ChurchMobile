@@ -33,7 +33,6 @@ export default function App() {
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
 
   useEffect(() => {
-    storage.getItem('needsPasswordChange').then(val => { if (val === 'true') setNeedsPasswordChange(true); });
     supabase.auth.getSession().then(({ data: { session } }) => { handleSession(session); });
     supabase.auth.onAuthStateChange((_event, session) => { handleSession(session); });
   }, []);
@@ -41,10 +40,24 @@ export default function App() {
   async function handleSession(currentSession: any) {
     setSession(currentSession);
     if (currentSession) {
-      const { data } = await supabase.from('user_roles').select('role').eq('user_id', currentSession.user.id).single();
-      const role = data?.role || null;
+      // Lecture parallèle du rôle ET du flag must_change_password (flag
+      // serveur unifié web + mobile, partagé via le même backend Supabase).
+      const [rolesRes, profileRes] = await Promise.all([
+        supabase.from('user_roles').select('role').eq('user_id', currentSession.user.id).single(),
+        supabase.from('user_profiles').select('must_change_password').eq('id', currentSession.user.id).single(),
+      ]);
+      const role = rolesRes.data?.role || null;
+      const mustChange = profileRes.data?.must_change_password === true;
       setUserRole(role);
-      
+      setNeedsPasswordChange(mustChange);
+      if (mustChange) {
+        // On persiste le flag local pour qu'il survive à un reload,
+        // mais la source de vérité reste la colonne serveur.
+        await storage.setItem('needsPasswordChange', 'true');
+      } else {
+        await storage.removeItem('needsPasswordChange');
+      }
+
       // 🔴 LOGIQUE DE BYPASS : Redirection directe pour le pasteur
       if (role === 'CHURCH_LEADER') {
         setCurrentView('PASTOR_DASHBOARD');
@@ -52,13 +65,14 @@ export default function App() {
         setCurrentView('HOME');
       }
     } else {
-      setUserRole(null); 
+      setUserRole(null);
+      setNeedsPasswordChange(false);
+      await storage.removeItem('needsPasswordChange');
       setCurrentView('HOME');
     }
     setIsReady(true);
   }
 
-  const handleTempLogin = async () => { setNeedsPasswordChange(true); await storage.setItem('needsPasswordChange', 'true'); };
   const handlePasswordChanged = async () => { setNeedsPasswordChange(false); await storage.removeItem('needsPasswordChange'); };
 
   const { isLargeScreen, contentMaxWidth, horizontalPadding } = useResponsive();
@@ -73,7 +87,7 @@ export default function App() {
   // Sur grand écran (web/desktop/tablette) on centre le contenu mobile-first dans
   // un conteneur ScrollView pour reproduire l'expérience d'un téléphone.
   const Screen = !session ? (
-    authView === 'LOGIN' ? <LoginScreen onTempLogin={handleTempLogin} onNavigateToRegister={() => setAuthView('REGISTER')} /> : <RegisterScreen onNavigateToLogin={() => setAuthView('LOGIN')} />
+    authView === 'LOGIN' ? <LoginScreen onNavigateToRegister={() => setAuthView('REGISTER')} /> : <RegisterScreen onNavigateToLogin={() => setAuthView('LOGIN')} />
   ) : needsPasswordChange ? (
     <ForceChangePasswordScreen onPasswordChanged={handlePasswordChanged} />
   ) : currentView === 'FINANCE' ? (

@@ -118,9 +118,11 @@ export default function ActivitiesModule({ deptId, isLeader, deptName }: Activit
               <Text style={styles.modalTitle}>Nouvelle Rencontre</Text>
               <TextInput style={styles.input} placeholder="Titre (ex: Réunion mensuelle...)" value={newMeeting.title} onChangeText={v => setNewMeeting({ ...newMeeting, title: v })} />
               <Text style={styles.label}>Date de la rencontre</Text>
-              <DateTimePicker value={dateObj} onChange={(d: Date) => {
-                setDateObj(d);
-                setNewMeeting({ ...newMeeting, date: d.toISOString() });
+              <DateTimePicker value={dateObj} onChange={(e, d) => {
+                if (d) {
+                  setDateObj(d);
+                  setNewMeeting({ ...newMeeting, date: d.toISOString() });
+                }
               }} />
               <TextInput style={styles.input} placeholder="Lieu" value={newMeeting.location} onChangeText={v => setNewMeeting({ ...newMeeting, location: v })} />
               <TextInput style={[styles.input, { height: 80 }]} placeholder="Description / Ordre du jour" value={newMeeting.description} onChangeText={v => setNewMeeting({ ...newMeeting, description: v })} multiline textAlignVertical="top" />

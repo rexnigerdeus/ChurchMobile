@@ -210,7 +210,9 @@ export default function HomeScreen({
         }
 
       if (churchId) {
-        const { data: depts } = await supabase.from('church_departments').select('*').eq('church_id', churchId);
+        const { data: depts } = await supabase.from('church_departments')
+          .select('*, community_departments(global_departments(default_name))')
+          .eq('church_id', churchId);
           setDepartments(depts || []);
 
           const { data: reqs } = await supabase.from('department_members').select('*').eq('user_id', user?.id);
@@ -271,7 +273,7 @@ export default function HomeScreen({
                 if(!dept) return null;
                 return (
                   <TouchableOpacity key={`led_d_${dept.id}`} style={styles.accessCardLeader} onPress={() => onNavigateToDepartment && onNavigateToDepartment(dept.id)}>
-                    <View><Text style={styles.accessCardLeaderTitle}>👑 {dept.custom_name || dept.name}</Text><Text style={styles.accessCardLeaderSub}>Gérer le département</Text></View><Text style={styles.accessCardLeaderTitle}>➔</Text>
+                    <View><Text style={styles.accessCardLeaderTitle}>👑 {dept.custom_name || (dept as any)?.community_departments?.global_departments?.default_name || 'Département'}</Text><Text style={styles.accessCardLeaderSub}>Gérer le département</Text></View><Text style={styles.accessCardLeaderTitle}>➔</Text>
                   </TouchableOpacity>
                 )
               })}
@@ -280,7 +282,7 @@ export default function HomeScreen({
                 if(!dept) return null;
                 return (
                   <TouchableOpacity key={`mem_d_${dept.id}`} style={styles.accessCardMember} onPress={() => onNavigateToDepartment && onNavigateToDepartment(dept.id)}>
-                    <View><Text style={styles.accessCardMemberTitle}>👥 {dept.custom_name || dept.name}</Text><Text style={styles.accessCardMemberSub}>Mon département</Text></View><Text style={styles.accessCardMemberTitle}>➔</Text>
+                    <View><Text style={styles.accessCardMemberTitle}>👥 {dept.custom_name || (dept as any)?.community_departments?.global_departments?.default_name || 'Département'}</Text><Text style={styles.accessCardMemberSub}>Mon département</Text></View><Text style={styles.accessCardMemberTitle}>➔</Text>
                   </TouchableOpacity>
                 )
               })}

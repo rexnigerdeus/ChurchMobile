@@ -45,7 +45,7 @@ export default function FamilyModule({ deptId, isLeader }: FamilyModuleProps) {
       .select('*')
       .eq('department_id', deptId)
       .order('created_at', { ascending: false });
-    if (error) console.warn('[FamilyModule] load error:', error.message);
+    if (error) console.warn('[FamilyModule] load error:', error.message, error.code);
     setFamilies(data || []);
     setLoading(false);
   }
@@ -53,7 +53,14 @@ export default function FamilyModule({ deptId, isLeader }: FamilyModuleProps) {
   const handleAdd = async () => {
     if (!newFamily.family_name.trim())
       return Alert.alert('Erreur', 'Le nom de la famille est obligatoire.');
+    if (!deptId)
+      return Alert.alert('Erreur', 'Identifiant de département manquant.');
     const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return Alert.alert('Erreur', 'Utilisateur non authentifié.');
+
+    const parsedChildren = parseInt(newFamily.children_count, 10);
+    const childrenCount = Number.isNaN(parsedChildren) ? 0 : parsedChildren;
+
     const { error } = await supabase.from('department_families').insert({
       department_id: deptId,
       family_name: newFamily.family_name.trim(),
@@ -63,13 +70,16 @@ export default function FamilyModule({ deptId, isLeader }: FamilyModuleProps) {
       spouse2_phone: newFamily.spouse2_phone.trim() || null,
       marriage_date: newFamily.marriage_date || null,
       marriage_status: newFamily.marriage_status,
-      children_count: parseInt(newFamily.children_count) || 0,
+      children_count: childrenCount,
       address: newFamily.address.trim() || null,
       spiritual_status: newFamily.spiritual_status,
       notes: newFamily.notes.trim() || null,
-      created_by: user?.id,
+      created_by: user.id,
     });
-    if (error) return Alert.alert('Erreur', error.message);
+    if (error) {
+      console.warn('[FamilyModule] insert error:', error.message, error.code, error.details);
+      return Alert.alert('Erreur', `Impossible d\u2019enregistrer la famille.\n${error.message}${error.hint ? `\n${error.hint}` : ''}`);
+    }
     setIsAdding(false);
     setNewFamily({ family_name: '', spouse1_name: '', spouse2_name: '', spouse1_phone: '', spouse2_phone: '', marriage_date: '', marriage_status: 'MARRIED', children_count: '', address: '', spiritual_status: 'ACTIVE', notes: '' });
     setDateObj(undefined);
@@ -81,7 +91,8 @@ export default function FamilyModule({ deptId, isLeader }: FamilyModuleProps) {
     const order = ['ACTIVE', 'NEW', 'COUNSELING', 'INACTIVE'];
     const idx = order.indexOf(fam.spiritual_status);
     const next = order[(idx + 1) % order.length];
-    await supabase.from('department_families').update({ spiritual_status: next }).eq('id', fam.id);
+    const { error } = await supabase.from('department_families').update({ spiritual_status: next }).eq('id', fam.id);
+    if (error) console.warn('[FamilyModule] update status error:', error.message, error.code);
     loadFamilies();
   };
 
@@ -90,7 +101,12 @@ export default function FamilyModule({ deptId, isLeader }: FamilyModuleProps) {
     Alert.alert('Supprimer', `Supprimer la famille « ${fam.family_name} » ?`, [
       { text: 'Annuler', style: 'cancel' },
       { text: 'Supprimer', style: 'destructive', onPress: async () => {
-        await supabase.from('department_families').delete().eq('id', fam.id);
+        const { error } = await supabase.from('department_families').delete().eq('id', fam.id);
+        if (error) {
+          console.warn('[FamilyModule] delete error:', error.message, error.code);
+          Alert.alert('Erreur', `Suppression impossible.\n${error.message}`);
+          return;
+        }
         loadFamilies();
       }},
     ]);
@@ -181,9 +197,11 @@ export default function FamilyModule({ deptId, isLeader }: FamilyModuleProps) {
                 <TextInput style={[styles.input, { flex: 1 }]} placeholder="Tél. Conjoint 2" value={newFamily.spouse2_phone} onChangeText={v => setNewFamily({ ...newFamily, spouse2_phone: v })} keyboardType="phone-pad" />
               </View>
               <Text style={styles.label}>Date du mariage</Text>
-              <DateTimePicker value={dateObj} onChange={(d: Date) => {
-                setDateObj(d);
-                setNewFamily({ ...newFamily, marriage_date: d.toISOString().split('T')[0] });
+              <DateTimePicker value={dateObj} onChange={(e, d) => {
+                if (d) {
+                  setDateObj(d);
+                  setNewFamily({ ...newFamily, marriage_date: d.toISOString().split('T')[0] });
+                }
               }} />
               <TextInput style={styles.input} placeholder="Nombre d'enfants" value={newFamily.children_count} onChangeText={v => setNewFamily({ ...newFamily, children_count: v })} keyboardType="numeric" />
               <TextInput style={styles.input} placeholder="Adresse" value={newFamily.address} onChangeText={v => setNewFamily({ ...newFamily, address: v })} multiline />

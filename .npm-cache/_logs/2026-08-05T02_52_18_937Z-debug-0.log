@@ -1,0 +1,55 @@
+0 verbose cli /Users/MacBook/.nvm/versions/node/v22.22.3/bin/node /Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@10.9.8
+2 info using node@v22.22.3
+3 silly config load:file:/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/MacBook/davinci-code/mon-eglise/ChurchMobile/.npmrc
+5 silly config load:file:/Users/MacBook/.npmrc
+6 silly config load:file:/Users/MacBook/.nvm/versions/node/v22.22.3/etc/npmrc
+7 verbose title npm exec expo export --platform web
+8 verbose argv "exec" "--" "expo" "export" "--platform" "web"
+9 verbose logfile logs-max:10 dir:/Users/MacBook/davinci-code/mon-eglise/ChurchMobile/.npm-cache/_logs/2026-08-05T02_52_18_937Z-
+10 verbose logfile /Users/MacBook/davinci-code/mon-eglise/ChurchMobile/.npm-cache/_logs/2026-08-05T02_52_18_937Z-debug-0.log
+11 silly logfile done cleaning log files
+12 verbose stack Error: spawn EPERM
+12 verbose stack     at ChildProcess.spawn (node:internal/child_process:420:11)
+12 verbose stack     at spawn (node:child_process:787:9)
+12 verbose stack     at promiseSpawn (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/promise-spawn/lib/index.js:39:16)
+12 verbose stack     at spawnWithShell (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/promise-spawn/lib/index.js:124:10)
+12 verbose stack     at promiseSpawn (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/promise-spawn/lib/index.js:12:12)
+12 verbose stack     at runScriptPkg (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/run-script-pkg.js:79:13)
+12 verbose stack     at runScript (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/run-script.js:9:12)
+12 verbose stack     at run (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/libnpmexec/lib/run-script.js:48:10)
+12 verbose stack     at async exec (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/libnpmexec/lib/index.js:154:16)
+12 verbose stack     at async Npm.exec (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/lib/npm.js:207:9)
+13 error code EPERM
+14 error syscall spawn
+15 error errno -1
+16 error Error: spawn EPERM
+16 error     at ChildProcess.spawn (node:internal/child_process:420:11)
+16 error     at spawn (node:child_process:787:9)
+16 error     at promiseSpawn (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/promise-spawn/lib/index.js:39:16)
+16 error     at spawnWithShell (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/promise-spawn/lib/index.js:124:10)
+16 error     at promiseSpawn (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/promise-spawn/lib/index.js:12:12)
+16 error     at runScriptPkg (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/run-script-pkg.js:79:13)
+16 error     at runScript (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/run-script.js:9:12)
+16 error     at run (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/libnpmexec/lib/run-script.js:48:10)
+16 error     at async exec (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/node_modules/libnpmexec/lib/index.js:154:16)
+16 error     at async Npm.exec (/Users/MacBook/.nvm/versions/node/v22.22.3/lib/node_modules/npm/lib/npm.js:207:9) {
+16 error   errno: -1,
+16 error   code: 'EPERM',
+16 error   syscall: 'spawn'
+16 error }
+17 error
+17 error The operation was rejected by your operating system.
+17 error It is likely you do not have the permissions to access this file as the current user
+17 error
+17 error If you believe this might be a permissions issue, please double-check the
+17 error permissions of the file and its containing directories, or try running
+17 error the command again as root/Administrator.
+18 verbose cwd /Users/MacBook/davinci-code/mon-eglise/ChurchMobile
+19 verbose os Darwin 25.5.0
+20 verbose node v22.22.3
+21 verbose npm  v10.9.8
+22 verbose exit -1
+23 verbose code -1
+24 error A complete log of this run can be found in: /Users/MacBook/davinci-code/mon-eglise/ChurchMobile/.npm-cache/_logs/2026-08-05T02_52_18_937Z-debug-0.log
